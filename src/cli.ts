@@ -170,6 +170,9 @@ async function main() {
     let output = "";
     let cost = 0;
 
+    const stageStartTime = Date.now();
+    let toolCallCount = 0;
+
     session.subscribe((event: any) => {
       if (event?.type === "message_update" && event?.assistantMessageEvent?.type === "text_delta") {
         const d = event.assistantMessageEvent.delta ?? "";
@@ -178,6 +181,19 @@ async function main() {
       }
       if (event?.type === "message_end" && event?.message?.role === "assistant" && event?.message?.usage?.cost?.total) {
         cost += event.message.usage.cost.total;
+      }
+      if (event?.type === "tool_execution_start") {
+        toolCallCount++;
+        const elapsed = ((Date.now() - stageStartTime) / 1000).toFixed(0);
+        const args = event.args ?? {};
+        const cmd = event.toolName === "bash" ? (args.command ?? "").substring(0, 80) : event.toolName;
+        process.stdout.write(C.dim + "[" + elapsed + "s] " + C.reset + C.yellow + "\u2699 " + cmd + C.reset + "\n");
+      }
+      if (event?.type === "tool_execution_end") {
+        const elapsed = ((Date.now() - stageStartTime) / 1000).toFixed(0);
+        const icon = event.isError ? "\u2716" : "\u2714";
+        const color = event.isError ? C.red : C.green;
+        process.stdout.write(C.dim + "[" + elapsed + "s] " + color + icon + C.reset + "\n");
       }
     });
 
@@ -282,15 +298,26 @@ async function main() {
 
           let userInput: string;
           if (answersArg && existsSync(answersArg)) {
-            const allLines = readFileSync(answersArg, "utf-8").split("\n");
-            const lineIdx = allLines.findIndex(function(l) {
-              return l.trim() && !l.trim().startsWith("#");
-            });
-            if (lineIdx >= 0) {
-              userInput = allLines[lineIdx].trim();
-              allLines.splice(lineIdx, 1);
-              writeFileSync(answersArg, allLines.join("\n"), "utf-8");
-              console.log("\n  [答案: " + userInput + "]");
+            const raw = readFileSync(answersArg, "utf-8");
+            // 按 --- 分隔符切分为多个答案，每个答案可跨多行
+            const segments = raw.split(/\n-{3,}\n/);
+            let usedIdx = -1;
+            for (let si = 0; si < segments.length; si++) {
+              const text = segments[si].trim();
+              // 跳过纯注释的段
+              const cleanLines = text.split("\n").filter(function(l) {
+                return !l.trim().startsWith("#");
+              });
+              if (cleanLines.length > 0 && cleanLines.some(function(l) { return l.trim(); })) {
+                usedIdx = si;
+                break;
+              }
+            }
+            if (usedIdx >= 0) {
+              userInput = segments[usedIdx].trim();
+              segments.splice(usedIdx, 1);
+              writeFileSync(answersArg, segments.join("\n---\n"), "utf-8");
+              console.log("\n  [答案:\n" + userInput + "\n  ]");
             } else {
               userInput = "";
             }

@@ -2,36 +2,36 @@
   "outputDir": "docs/superpowers",
   "stages": {
     "brainstorming": {
-      "label": "需求探讨与方案设计",
-      "model": "opencode-go/kimi-k2.7-code",
+      "label": "Gemini 3.1 Pro 知识充实",
+      "model": "My-Gemini/gemini-3.1-pro-preview",
       "thinking": "high",
       "skill": "brainstorming",
       "interactive": true,
       "onFailure": "stop"
     },
     "writing-plans": {
-      "label": "编写实施计划",
-      "model": "My-Gemini/gemini-3.1-pro-preview",
+      "label": "GLM 5.2 搭建计划框架",
+      "model": "opencode-go/glm-5.2",
       "thinking": "medium",
       "skill": "writing-plans",
       "interactive": true,
       "onFailure": "stop"
     },
     "executing-plans": {
-      "label": "执行开发计划",
-      "model": "opencode-go/qwen3.7-max",
+      "label": "DeepSeek V4 Flash 编码实现",
+      "model": "opencode-go/deepseek-v4-flash",
       "thinking": "off",
       "skill": "subagent-driven-development",
       "onFailure": "continue"
     },
     "verification": {
-      "label": "验证与检查",
-      "model": "My-Gemini/gemini-3-flash-preview",
+      "label": "GPT-5.5 代码审查与验证",
+      "model": "openai-codex/gpt-5.5",
       "thinking": "low",
       "skill": "verification-before-completion",
       "onFailure": "continue",
       "e2e": {
-        "devCommand": "cd snake-game && npm run dev",
+        "devCommand": "cd output_projects/snake-game/code/snake-game && npm run dev",
         "baseUrl": "http://localhost:5173",
         "viewport": { "width": 1280, "height": 720 },
         "waitMs": 3000
