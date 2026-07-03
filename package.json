@@ -3,13 +3,20 @@
   "version": "0.1.0",
   "description": "多 Agent LLM 工作流编排器 - 基于 pi SDK",
   "type": "module",
-  "main": "src/index.js",
+  "bin": {
+    "llm-workflow": "./src/cli.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build": "tsc",
-    "start": "node src/cli.js"
+    "start": "tsx src/cli.ts"
+  },
+  "publishConfig": {
+    "bin": {
+      "llm-workflow": "dist/cli.js"
+    }
   },
   "keywords": [
     "pi-package",
@@ -17,6 +24,7 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "tsx": "^4.22.5",
     "typescript": "^5.9.3",
     "vitest": "^3.2.6"
   },
