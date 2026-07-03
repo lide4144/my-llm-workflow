@@ -30,3 +30,4 @@ npm-debug.log*
 # 工作流产物
 screenshots/
 docs/superpowers/
+output_projects/
