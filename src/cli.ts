@@ -39,7 +39,8 @@ function parseArgs(args: string[]) {
     else if (arg === "--override" || arg === "-o") {
       const val = args[++i]; const ci = val.indexOf(":");
       if (ci > 0) overrides[val.slice(0, ci)] = val.slice(ci + 1);
-    } else if (!arg.startsWith("--")) { positional.push(arg); }
+    } else if (arg === "--help" || arg === "-h") { positional.push("--help"); break; }
+    else if (!arg.startsWith("--")) { positional.push(arg); }
   }
   return { config, idea: positional.join(" ").trim(), from, to, overrides, images, project, answers, setup };
 }
@@ -129,17 +130,40 @@ async function main() {
 
   if (args.setup) { await runSetupWizard(); return; }
 
-  if (!args.idea) {
-    console.log("用法: npm start -- [选项] \"项目描述\"");
-    console.log("  --setup, -s            配置向导");
-    console.log("  --config, -c <path>    配置文件");
-    console.log("  --image, -i <path>     附加图片");
+  if (!args.idea || args.idea === "--help") {
+    console.log("");
+    console.log("my-llm-workflow — 多 Agent LLM 工作流编排器");
+    console.log("");
+    console.log("用法:");
+    console.log("  npm start -- \"项目描述\"");
+    console.log("  npm start -- --project myapp --answers ans.txt \"项目描述\"");
+    console.log("");
+    console.log("工作流阶段 (4步):");
+    console.log("  1. brainstorming  — Gemini 3.1 Pro 充实方案");
+    console.log("  2. writing-plans  — GLM 5.2 搭建计划");
+    console.log("  3. executing-plans — DeepSeek V4 Flash 编码");
+    console.log("  4. verification   — GPT-5.5 审查验证");
+    console.log("");
+    console.log("选项:");
+    console.log("  --project, -p <name>   项目名称, 输出到 output_projects/<name>/");
+    console.log("  --answers, -a <path>   从文件读取多轮回答");
+    console.log("  --config, -c <path>    配置文件 (默认: workflow.config.json)");
     console.log("  --from <stage>         起始阶段");
     console.log("  --to <stage>           结束阶段");
-    console.log("  --project, -p <name>   输出到 output_projects/<name>/");
-    console.log("  --answers, -a <path>   答案文件");
-    console.log("  --override, -o <s:m>   覆盖模型");
-    process.exit(1);
+    console.log("  --image, -i <path>     附加图片");
+    console.log("  --override, -o <s:m>   覆盖某阶段的模型");
+    console.log("  --setup, -s            交互式模型配置向导");
+    console.log("  --help, -h             显示此帮助");
+    console.log("");
+    console.log("答案文件格式:");
+    console.log("  每个答案用 --- 分隔");
+    console.log("  答案文件示例:");
+    console.log("    2-4人对战");
+    console.log("    最后存活者获胜");
+    console.log("    ---");
+    console.log("    在现有基础上开发");
+    console.log("");
+    process.exit(0);
   }
 
   if (!existsSync(args.config)) { console.log("找不到: " + args.config); process.exit(1); }
