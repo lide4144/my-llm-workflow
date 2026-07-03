@@ -10,12 +10,14 @@
  *   node src/cli.mjs --override executing-plans:claude-sonnet "覆盖模型的执行阶段"
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { loadConfig, type WorkflowConfig } from "./config.js";
 import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.js";
 import { createPiAgentFactory } from "./pi-agent-factory.js";
 import { saveArtifact } from "./artifact-store.js";
 import { runSetupWizard } from "./config-wizard.js";
+import type { ImageInput } from "./stage-runner.js";
 
 // ─── 简易命令行解析（无需外部依赖） ─────────────────────────────
 
@@ -25,6 +27,7 @@ function parseArgs(args: string[]): {
   from?: string;
   to?: string;
   overrides: Record<string, string>;
+  images: string[];
   setup?: boolean;
 } {
   let config = "workflow.config.json";
@@ -32,6 +35,7 @@ function parseArgs(args: string[]): {
   let to: string | undefined;
   let setup = false;
   const overrides: Record<string, string> = {};
+  const images: string[] = [];
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -41,6 +45,8 @@ function parseArgs(args: string[]): {
       setup = true;
     } else if (arg === "--config" || arg === "-c") {
       config = args[++i];
+    } else if (arg === "--image" || arg === "-i") {
+      images.push(args[++i]);
     } else if (arg === "--from") {
       from = args[++i];
     } else if (arg === "--to") {
@@ -58,7 +64,7 @@ function parseArgs(args: string[]): {
     }
   }
 
-  return { config, idea: positional.join(" ").trim(), from, to, overrides, setup };
+  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, setup };
 }
 
 // ─── 彩色的 log ─────────────────────────────────────────────────
@@ -111,11 +117,12 @@ async function main() {
 
   if (!args.idea) {
     log(`${C.yellow}用法: npm start -- [选项] "项目描述"${C.reset}`);
-    log(`   --setup, -s           交互式模型配置向导`);
-    log(`   --config, -c <path>   配置文件路径 (默认: workflow.config.json)`);
-    log(`   --from <stage>        起始阶段`);
-    log(`   --to <stage>          结束阶段`);
-    log(`   --override, -o <s:m>  覆盖某阶段的模型, 如 "brainstorming:claude-sonnet"`);
+    log(`   --setup, -s            交互式模型配置向导`);
+    log(`   --config, -c <path>    配置文件路径 (默认: workflow.config.json)`);
+    log(`   --image, -i <path>     附加图片 (可重复使用)`);
+    log(`   --from <stage>         起始阶段`);
+    log(`   --to <stage>           结束阶段`);
+    log(`   --override, -o <s:m>   覆盖某阶段的模型, 如 "brainstorming:claude-sonnet"`);
     process.exit(1);
   }
 
@@ -137,7 +144,34 @@ async function main() {
     }
   }
 
-  // 3. 创建生产 AgentFactory 和 StageRunner
+  // 3. 加载图片
+  const loadedImages: ImageInput[] = [];
+  const MEDIA_TYPES: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+  };
+
+  for (const imgPath of args.images) {
+    if (!existsSync(imgPath)) {
+      log(`  ${C.yellow}⚠ 图片文件不存在: ${imgPath}${C.reset}`);
+      continue;
+    }
+    const ext = extname(imgPath).toLowerCase();
+    const mediaType = MEDIA_TYPES[ext];
+    if (!mediaType) {
+      log(`  ${C.yellow}⚠ 不支持的图片格式: ${imgPath} (支持: png, jpg, webp, gif, bmp)${C.reset}`);
+      continue;
+    }
+    const data = readFileSync(imgPath).toString("base64");
+    loadedImages.push({ path: imgPath, mediaType, base64: data });
+    log(`  ${C.dim}📷 已加载图片: ${imgPath} (${mediaType})${C.reset}`);
+  }
+
+  // 4. 创建生产 AgentFactory 和 StageRunner
   const agentFactory = createPiAgentFactory();
 
   const stageRunner: StageRunner = async (params) => {
@@ -180,7 +214,9 @@ async function main() {
     ].join("\n");
 
     try {
-      await session.prompt(promptText);
+      // 传图片（仅第一阶段携带图片，后续阶段只传文字）
+      const hasImages = loadedImages.length > 0 && params.stage === Object.keys(config.stages)[0];
+      await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
 
       // 保存 LLM 输出为产物
       const artifactMeta = await saveArtifact({

@@ -13,6 +13,13 @@ export interface StageResult {
   error?: string;
 }
 
+/** 图片输入 */
+export interface ImageInput {
+  path: string;
+  mediaType: string;
+  base64: string;
+}
+
 /** 阶段执行参数 */
 export interface StageRunnerOptions {
   stage: string;
@@ -21,11 +28,12 @@ export interface StageRunnerOptions {
   modelRef: string;
   outputDir: string;
   onOutput?: (text: string) => void;
+  images?: ImageInput[];
 }
 
 /** Agent 会话接口 */
 export interface AgentSession {
-  prompt(text: string): Promise<void>;
+  prompt(text: string, options?: { images?: ImageInput[] }): Promise<void>;
   subscribe(fn: (event: unknown) => void): () => void;
   dispose(): void;
 }

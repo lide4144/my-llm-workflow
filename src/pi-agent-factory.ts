@@ -72,8 +72,21 @@ class PiAgentSessionWrapper implements AgentSession {
     };
   }
 
-  async prompt(text: string): Promise<void> {
-    await this.piSession.prompt(text);
+  async prompt(text: string, options?: { images?: import("./stage-runner.js").ImageInput[] }): Promise<void> {
+    const piOptions: Record<string, unknown> = {};
+
+    if (options?.images && options.images.length > 0) {
+      piOptions.images = options.images.map((img) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          mediaType: img.mediaType,
+          data: img.base64,
+        },
+      }));
+    }
+
+    await this.piSession.prompt(text, piOptions);
   }
 
   dispose(): void {
