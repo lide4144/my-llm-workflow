@@ -31,7 +31,6 @@
       "e2e": {
         "devCommand": "npm run dev",
         "baseUrl": "http://localhost:5173",
-        "paths": ["/"],
         "viewport": { "width": 1280, "height": 720 },
         "waitMs": 2000
       }

@@ -213,37 +213,87 @@ async function main() {
       params.context,
     ];
 
-    // 如果有 E2E 配置, 注入视觉验证指令
-    const e2e = params.config.e2e;
-    if (e2e) {
-      const screenshotScript = resolve(import.meta.dirname!, "e2e-screenshot.mjs");
-      const viewport = e2e.viewport ? `${e2e.viewport.width}x${e2e.viewport.height}` : "1280x720";
+    // E2E 视觉验证 — 按阶段注入不同指引
+    // 配置取自 verification 阶段的 e2e 字段, 影响全部阶段
+    const e2eCfg = config.stages.verification?.e2e;
+    const screenshotScript = resolve(import.meta.dirname!, "e2e-screenshot.mjs");
+    const vp = e2eCfg?.viewport ? `${e2eCfg.viewport.width}x${e2eCfg.viewport.height}` : "1280x720";
 
+    if (e2eCfg && params.stage === "brainstorming") {
+      promptLines.push(
+        ``,
+        `## 前端页面测试策略`,
+        ``,
+        `本项目包含前端页面, 请在设计中考虑 E2E 测试需求。`,
+        `后续阶段会基于你的设计编写 Playwright 测试并截图验证。`,
+        `在方案中注明哪些功能点需要截图验证。`
+      );
+
+    } else if (e2eCfg && params.stage === "writing-plans") {
+      promptLines.push(
+        ``,
+        `## E2E 测试设计`,
+        ``,
+        `本项目包含前端页面, 请设计端到端 (E2E) 测试策略。`,
+        ``,
+        `### 基础设施`,
+        `- Dev server: \`${e2eCfg.devCommand}\` 启动在 ${e2eCfg.baseUrl}`,
+        `- 视口: ${vp}`,
+        ``,
+        `### 要求`,
+        `1. 设计 3-5 个核心用户场景（如: 访问首页 → 导航 → 交互 → 验证）`,
+        `2. 对每个场景指定:`,
+        `   - 测试步骤（用户操作序列）`,
+        `   - 预期结果（页面内容、URL、UI 状态）`,
+        `   - 视觉检查点（需要截图验证的关键元素）`,
+        `3. 在计划文档中列出这些场景`,
+        `4. 实施阶段会根据你的设计编写 Playwright 测试脚本`
+      );
+
+    } else if (e2eCfg && params.stage === "executing-plans") {
+      promptLines.push(
+        ``,
+        `## E2E 测试实现`,
+        ``,
+        `请根据上一阶段设计的 E2E 场景, 用 Playwright 编写自动化测试。`,
+        ``,
+        `### 要求`,
+        `1. 安装 Playwright: \`npm install --save-dev playwright\``,
+        `2. 创建 tests/e2e/ 目录和测试文件`,
+        `3. 每个场景一个测试, 包含:`,
+        `   - 页面导航操作`,
+        `   - 用户交互`,
+        `   - 截图: \`await page.screenshot({ path: \`screenshots/<场景名>.png\` })\``,
+        `   - 断言 (URL、文本、元素可见性)`,
+        `4. 确保测试可独立运行: \`npx playwright test tests/e2e/\``,
+        `5. 提交后 verification 阶段会自动执行这些测试并查看截图`,
+        ``,
+        `### 基础设施`,
+        `- Dev server: \`${e2eCfg.devCommand}\` 启动在 ${e2eCfg.baseUrl}`,
+        `- 视口: ${vp}`
+      );
+
+    } else if (e2eCfg && params.stage === "verification") {
       promptLines.push(
         ``,
         `## E2E 视觉验证`,
         ``,
-        `本项目已启动在前端页面，你需要通过截图来验证页面渲染是否正确。`,
+        `你需要执行前序阶段设计的 E2E 测试, 并通过截图验证页面渲染。`,
         ``,
         `### 步骤`,
-        `1. 确保 dev server 已启动 (或在当前终端启动)`,
-        `2. 使用截图工具获取页面截图:`,
-        `   node "${screenshotScript}" \\`,
-        `     --base-url ${e2e.baseUrl} \\`,
-        `     --paths ${e2e.paths.join(",")} \\`,
-        `     --viewport ${viewport} \\`,
-        `     --wait ${e2e.waitMs ?? 2000}`,
+        `1. 启动 dev server: \`${e2eCfg.devCommand}\``,
+        `2. 运行 E2E 测试: \`npx playwright test tests/e2e/\``,
+        `   - 如果 tests/e2e/ 不存在, 用截图工具手动截图:`,
+        `     node "${screenshotScript}" --base-url ${e2eCfg.baseUrl} --paths / --viewport ${vp}`,
         `3. 用 read 工具查看每张截图, 检查:`,
         `   - 页面是否为完全空白 (白屏)`,
         `   - 是否有渲染错误或控制台报错`,
         `   - 布局是否正常, 关键 UI 元素是否可见`,
-        `   - 图片、图标、字体是否加载成功`,
         `4. 如果有页面异常, 分析原因并修复`,
         `5. 修复后重新截图验证`,
         ``,
         `重要: 你必须\`亲眼\`看截图来验证, 不能只依赖状态码。`,
-        `前端渲染错误经常返回 200 但页面空白。`,
-        `如果截图工具报告错误, 检查是否 dev server 未启动或端口不对。`
+        `前端渲染错误经常返回 200 但页面空白。`
       );
     }
 

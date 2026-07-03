@@ -12,8 +12,6 @@ export interface E2EConfig {
   devCommand: string;
   /** 应用的基础 URL, 如 "http://localhost:5173" */
   baseUrl: string;
-  /** 需要截图的页面路径列表, 如 ["/", "/about"] */
-  paths: string[];
   /** 视口尺寸, 默认 1280x720 */
   viewport?: { width: number; height: number };
   /** 页面加载后等待的毫秒数, 默认 2000 */
@@ -115,13 +113,9 @@ function validateE2EConfig(val: unknown): E2EConfig | undefined {
   if (typeof e.baseUrl !== "string" || !e.baseUrl) {
     throw new Error("e2e.baseUrl 必须是非空字符串");
   }
-  if (!Array.isArray(e.paths) || e.paths.length === 0) {
-    throw new Error("e2e.paths 必须是非空数组");
-  }
   return {
     devCommand: e.devCommand,
     baseUrl: e.baseUrl,
-    paths: e.paths.map(String),
     viewport: e.viewport && typeof e.viewport === "object"
       ? { width: Number((e.viewport as any).width) || 1280, height: Number((e.viewport as any).height) || 720 }
       : undefined,
