@@ -1,0 +1,26 @@
+{
+  "name": "my-llm-workflow",
+  "version": "0.1.0",
+  "description": "多 Agent LLM 工作流编排器 - 基于 pi SDK",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "build": "tsc",
+    "start": "node src/cli.js"
+  },
+  "keywords": [
+    "pi-package",
+    "llm-workflow"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3"
+  }
+}
