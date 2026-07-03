@@ -17,6 +17,8 @@ import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.
 import { createPiAgentFactory } from "./pi-agent-factory.js";
 import { saveArtifact } from "./artifact-store.js";
 import { runSetupWizard } from "./config-wizard.js";
+import * as readline from "node:readline/promises";
+import { stdin as rlInput, stdout as rlOutput } from "node:process";
 import type { ImageInput } from "./stage-runner.js";
 
 // ─── 简易命令行解析（无需外部依赖） ─────────────────────────────
@@ -300,16 +302,39 @@ async function main() {
     const promptText = promptLines.join("\n");
 
     try {
-      // 传图片（仅第一阶段携带图片，后续阶段只传文字）
       const hasImages = loadedImages.length > 0 && params.stage === Object.keys(config.stages)[0];
-      await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
 
-      // 保存 LLM 输出为产物
+      if (params.config.interactive) {
+        let turn = 0;
+        let currentPrompt = promptText;
+        const maxTurns = 10;
+        let passImages = hasImages;
+
+        while (turn < maxTurns) {
+          await session.prompt(currentPrompt, passImages ? { images: loadedImages } : undefined);
+          turn++;
+          passImages = false;
+
+          const lastLine = output.trim().split("\n").pop()?.trim() ?? "";
+          const waiting = /[?？]$/.test(lastLine) ||
+            /请选择|请回答|Which approach|选择|回车/.test(lastLine);
+          if (!waiting || turn >= maxTurns) break;
+
+          const rl = readline.createInterface({ input: rlInput, output: rlOutput });
+          const answer = await rl.question("\n  " + C.cyan + "\u270e 你的回答" + C.reset + " (直接回车结束本轮): ");
+          rl.close();
+          if (!answer.trim()) break;
+          currentPrompt = answer;
+        }
+      } else {
+        await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
+      }
+
       const artifactMeta = await saveArtifact({
         outputDir: params.outputDir,
         stage: params.stage,
-        fileName: `stage-${params.stage}-output.md`,
-        content: output || `# ${params.stage}\n\n(无文本输出)\n`,
+        fileName: "stage-" + params.stage + "-output.md",
+        content: output || "# " + params.stage + "\n\n(无文本输出)\n",
       });
 
       return {

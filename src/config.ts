@@ -25,6 +25,8 @@ export interface StageConfig {
   thinking?: ThinkingLevel;
   skill?: string;
   onFailure?: FailureStrategy;
+  /** 是否支持多轮交互（agent 问问题后可暂停等待用户回答） */
+  interactive?: boolean;
   /** E2E 视觉验证配置 (仅 verification 阶段有效) */
   e2e?: E2EConfig;
 }
@@ -84,6 +86,7 @@ export function validateConfig(raw: unknown): WorkflowConfig {
       thinking: validateThinkingLevel(s.thinking),
       skill: typeof s.skill === "string" ? s.skill : undefined,
       onFailure: validateFailureStrategy(s.onFailure),
+      interactive: s.interactive === true,
       e2e: validateE2EConfig(s.e2e),
     };
   }

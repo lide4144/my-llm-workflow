@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { WorkflowConfig, StageConfig } from "./config.js";
 
 /** Stage runner 返回的原始结果 */
@@ -103,9 +105,18 @@ export async function runWorkflow(
     };
     records.push(record);
 
-    // 更新 context — 下一阶段知道上一阶段的产出
+    // 更新 context — 包含上一阶段的完整产出内容
     if (result.artifacts.length > 0) {
-      context = `上一阶段 "${name}" 已完成。\n产出物:\n${result.artifacts.map((a) => `- ${a}`).join("\n")}\n\n继续下一阶段。`;
+      const stageDir = join(outputDir, name);
+      let stageContent = "";
+      try {
+        const outFile = join(stageDir, "stage-" + name + "-output.md");
+        if (existsSync(outFile)) {
+          stageContent = readFileSync(outFile, "utf-8").slice(0, 4000);
+        }
+      } catch {}
+
+      context = '上一阶段 "' + name + '" 已完成 (' + (result.duration / 1000).toFixed(1) + 's, $' + result.cost.toFixed(4) + ').\n\n### 上一阶段产出内容:\n\n' + (stageContent || "(无详细内容)") + '\n\n### 产出物文件:\n' + result.artifacts.map(function(a) { return "- " + a; }).join("\n") + '\n\n请基于以上信息继续当前阶段的工作。';
     }
 
     options.onStageComplete?.(record);
