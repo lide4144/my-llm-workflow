@@ -1,13 +1,6 @@
 #!/usr/bin/env tsx
 /**
  * my-llm-workflow CLI 入口
- *
- * 用法:
- *   npm start -- "做一个番茄钟 CLI 工具"
- *   npx tsx src/cli.ts "做一个番茄钟 CLI 工具"
- *   node src/cli.mjs --config path/to/config.json "项目想法"
- *   node src/cli.mjs --from writing-plans "只从计划阶段开始"
- *   node src/cli.mjs --override executing-plans:claude-sonnet "覆盖模型的执行阶段"
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,17 +14,9 @@ import * as readline from "node:readline/promises";
 import { stdin as rlInput, stdout as rlOutput } from "node:process";
 import type { ImageInput } from "./stage-runner.js";
 
-// ─── 简易命令行解析（无需外部依赖） ─────────────────────────────
+// ─── 参数解析 ───────────────────────────────────────────────
 
-function parseArgs(args: string[]): {
-  config: string;
-  idea: string;
-  from?: string;
-  to?: string;
-  overrides: Record<string, string>;
-  images: string[];
-  setup?: boolean;
-} {
+function parseArgs(args: string[]) {
   let config = "workflow.config.json";
   let from: string | undefined;
   let to: string | undefined;
@@ -66,16 +51,20 @@ function parseArgs(args: string[]): {
         overrides[val.slice(0, colonIdx)] = val.slice(colonIdx + 1);
       }
     } else if (arg.startsWith("--")) {
-      // skip unknown flags
+      // skip unknown
     } else {
       positional.push(arg);
     }
   }
 
-  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, project, answers, setup };
+  return {
+    config,
+    idea: positional.join(" ").trim(),
+    from, to, overrides, images, project, answers, setup,
+  };
 }
 
-// ─── 彩色的 log ─────────────────────────────────────────────────
+// ─── 彩色 log ───────────────────────────────────────────────
 
 const C = {
   reset: "\x1b[0m",
@@ -91,29 +80,23 @@ function log(...msg: string[]) {
   console.log(...msg);
 }
 
-function logStage(name: string, index: number, total: number, config: { model: string; label?: string }) {
-  log(`\n${C.bold}${C.cyan}▶ [${index + 1}/${total}] ${name}${C.reset}`);
-  if (config.label) log(`  ${C.dim}${config.label}${C.reset}`);
-  log(`  ${C.dim}模型: ${config.model}${C.reset}`);
+function logStage(name: string, idx: number, total: number, cfg: { model: string; label?: string }) {
+  log(`\n${C.bold}${C.cyan}> [${idx + 1}/${total}] ${name}${C.reset}`);
+  if (cfg.label) log(`  ${C.dim}${cfg.label}${C.reset}`);
+  log(`  ${C.dim}模型: ${cfg.model}${C.reset}`);
 }
 
-function logStageResult(result: StageResult, index: number) {
-  const icon = result.status === "success" ? "✓" : result.status === "failure" ? "✗" : "−";
-  const color = result.status === "success" ? C.green : C.red;
-  const time = `${(result.duration / 1000).toFixed(1)}s`;
-  const cost = result.cost > 0 ? `, 成本: $${result.cost.toFixed(4)}` : "";
-  log(`  ${color}${icon} ${result.stage}${C.reset} ${C.dim}(${time}${cost})${C.reset}`);
-  if (result.error) {
-    log(`    ${C.red}错误: ${result.error}${C.reset}`);
-  }
-  if (result.artifacts.length > 0) {
-    for (const a of result.artifacts) {
-      log(`    ${C.dim}产出: ${a}${C.reset}`);
-    }
-  }
+function logStageResult(r: StageResult) {
+  const icon = r.status === "success" ? "OK" : r.status === "failure" ? "FAIL" : "--";
+  const color = r.status === "success" ? C.green : C.red;
+  const time = `${(r.duration / 1000).toFixed(1)}s`;
+  const cost = r.cost > 0 ? `, 成本: $${r.cost.toFixed(4)}` : "";
+  log(`  ${color}${icon} ${r.stage}${C.reset} ${C.dim}(${time}${cost})${C.reset}`);
+  if (r.error) log(`    ${C.red}错误: ${r.error}${C.reset}`);
+  for (const a of r.artifacts) log(`    ${C.dim}产出: ${a}${C.reset}`);
 }
 
-// ─── 主流程 ─────────────────────────────────────────────────────
+// ─── 主流程 ─────────────────────────────────────────────────
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -125,73 +108,58 @@ async function main() {
 
   if (!args.idea) {
     log(`${C.yellow}用法: npm start -- [选项] "项目描述"${C.reset}`);
-    log(`   --setup, -s            交互式模型配置向导`);
-    log(`   --config, -c <path>    配置文件路径 (默认: workflow.config.json)`);
-    log(`   --image, -i <path>     附加图片 (可重复使用)`);
+    log(`   --setup, -s            配置向导`);
+    log(`   --config, -c <path>    配置文件 (默认: workflow.config.json)`);
+    log(`   --image, -i <path>     附加图片`);
     log(`   --from <stage>         起始阶段`);
     log(`   --to <stage>           结束阶段`);
-    log(`   --project, -p <name>   项目名称, 输出到 output_projects/<name>/`);
-    log(`   --answers, -a <path>   从文件读取回答 (替换键盘交互)`);
-    log(`   --override, -o <s:m>   覆盖某阶段的模型, 如 "brainstorming:claude-sonnet"`);
+    log(`   --project, -p <name>   输出到 output_projects/<name>/`);
+    log(`   --answers, -a <path>   答案文件 (替代键盘输入)`);
+    log(`   --override, -o <s:m>   覆盖模型`);
     process.exit(1);
   }
 
-  // 1. 加载配置
+  // 加载配置
   if (!existsSync(args.config)) {
-    log(`${C.red}找不到配置文件: ${args.config}${C.reset}`);
-    log(`请在当前目录创建 workflow.config.json，或使用 --config 指定路径。`);
+    log(`${C.red}找不到: ${args.config}${C.reset}`);
     process.exit(1);
   }
   let config = await loadConfig(args.config);
 
-  // 如果指定了 --project, 输出到 output_projects/<project>/
-  if (args.project) {
-    const projectDir = "output_projects/" + args.project;
+  // 项目输出目录
+  const projectDir = args.project ? "output_projects/" + args.project : null;
+  if (projectDir) {
     config.outputDir = projectDir;
-    log(`${C.dim}  \ud83d\udcc1 项目输出: ${projectDir}/${C.reset}`);
+    log(`  ${C.dim}项目输出: ${projectDir}/${C.reset}`);
   }
 
-  // 2. 应用 overrides
-  if (Object.keys(args.overrides).length > 0) {
-    for (const [stage, model] of Object.entries(args.overrides)) {
-      if (config.stages[stage]) {
-        config.stages[stage].model = model;
-        log(`${C.dim}  覆写 ${stage} 模型为: ${model}${C.reset}`);
-      }
+  // 应用 overrides
+  for (const [stage, model] of Object.entries(args.overrides)) {
+    if (config.stages[stage]) {
+      config.stages[stage].model = model;
+      log(`${C.dim}  覆写 ${stage}: ${model}${C.reset}`);
     }
   }
 
-  // 3. 加载图片
+  // 加载图片
   const loadedImages: ImageInput[] = [];
   const MEDIA_TYPES: Record<string, string> = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-    ".bmp": "image/bmp",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
   };
-
   for (const imgPath of args.images) {
-    if (!existsSync(imgPath)) {
-      log(`  ${C.yellow}⚠ 图片文件不存在: ${imgPath}${C.reset}`);
-      continue;
-    }
+    if (!existsSync(imgPath)) { log(`  ${C.yellow}图片不存在: ${imgPath}${C.reset}`); continue; }
     const ext = extname(imgPath).toLowerCase();
-    const mediaType = MEDIA_TYPES[ext];
-    if (!mediaType) {
-      log(`  ${C.yellow}⚠ 不支持的图片格式: ${imgPath} (支持: png, jpg, webp, gif, bmp)${C.reset}`);
-      continue;
-    }
-    const data = readFileSync(imgPath).toString("base64");
-    loadedImages.push({ path: imgPath, mediaType, base64: data });
-    log(`  ${C.dim}📷 已加载图片: ${imgPath} (${mediaType})${C.reset}`);
+    const mt = MEDIA_TYPES[ext];
+    if (!mt) { log(`  ${C.yellow}不支持的格式: ${imgPath}${C.reset}`); continue; }
+    loadedImages.push({ path: imgPath, mediaType: mt, base64: readFileSync(imgPath).toString("base64") });
+    log(`  ${C.dim}图片: ${imgPath}${C.reset}`);
   }
 
-  // 4. 创建生产 AgentFactory 和 StageRunner
+  // 创建 AgentFactory
   const agentFactory = createPiAgentFactory();
-
   const answersArg = args.answers;
+
   const stageRunner: StageRunner = async (params) => {
     const startTime = Date.now();
     const session = await agentFactory.createSession({
@@ -203,116 +171,96 @@ async function main() {
     let cost = 0;
 
     session.subscribe((event: any) => {
-      if (
-        event?.type === "message_update" &&
-        event?.assistantMessageEvent?.type === "text_delta"
-      ) {
-        const delta = event.assistantMessageEvent.delta ?? "";
-        output += delta;
-        process.stdout.write(delta);
-        params.onOutput?.(delta);
+      if (event?.type === "message_update" && event?.assistantMessageEvent?.type === "text_delta") {
+        const d = event.assistantMessageEvent.delta ?? "";
+        output += d;
+        process.stdout.write(d);
       }
-      if (
-        event?.type === "message_end" &&
-        event?.message?.role === "assistant" &&
-        event?.message?.usage?.cost?.total
-      ) {
+      if (event?.type === "message_end" && event?.message?.role === "assistant" && event?.message?.usage?.cost?.total) {
         cost += event.message.usage.cost.total;
       }
     });
 
+    // 构建 prompt
     const promptLines = [
-      `## 工作流阶段: ${params.stage}${params.config.label ? ` (${params.config.label})` : ""}`,
-      ``,
-      `模型: ${params.modelRef}`,
-      params.config.skill ? `\n请使用 "${params.config.skill}" 技能来完成此阶段的工作。\n` : "",
-      ``,
-      `## 上下文`,
-      ``,
+      "## 工作流阶段: " + params.stage + (params.config.label ? " (" + params.config.label + ")" : ""),
+      "",
+      "模型: " + params.modelRef,
+      params.config.skill ? '\n请使用 "' + params.config.skill + '" 技能来完成此阶段的工作。\n' : "",
+      "",
+      "## 上下文",
+      "",
       params.context,
     ];
 
-    // E2E 视觉验证 — 按阶段注入不同指引
-    // 配置取自 verification 阶段的 e2e 字段, 影响全部阶段
+    // 项目输出目录提示（告诉 agent 文件放哪）
+    if (projectDir) {
+      promptLines.push(
+        "",
+        "## 输出目录规范",
+        "",
+        "所有产出物请放在以下目录:",
+        "- 阶段文档: " + projectDir + "/<stage>/",
+        "- 计划文件: " + projectDir + "/plans/",
+        "- 项目代码: " + projectDir + "/code/",
+        "- E2E 截图: " + projectDir + "/screenshots/",
+      );
+    }
+
+    // E2E 分阶段指引
     const e2eCfg = config.stages.verification?.e2e;
-    const screenshotScript = resolve(import.meta.dirname!, "e2e-screenshot.mjs");
-    const vp = e2eCfg?.viewport ? `${e2eCfg.viewport.width}x${e2eCfg.viewport.height}` : "1280x720";
+    const ssScript = resolve(import.meta.dirname!, "e2e-screenshot.mjs");
+    const vp = e2eCfg?.viewport ? e2eCfg.viewport.width + "x" + e2eCfg.viewport.height : "1280x720";
 
     if (e2eCfg && params.stage === "brainstorming") {
-      promptLines.push(
-        ``,
-        `## 前端页面测试策略`,
-        ``,
-        `本项目包含前端页面, 请在设计中考虑 E2E 测试需求。`,
-        `后续阶段会基于你的设计编写 Playwright 测试并截图验证。`,
-        `在方案中注明哪些功能点需要截图验证。`
-      );
+      promptLines.push("", "## E2E 测试策略", "", "项目包含前端页面，请在设计中考虑 E2E 测试需求。", "后续阶段会设计并实现 Playwright 测试。", "注明哪些功能点需要截图验证。");
 
     } else if (e2eCfg && params.stage === "writing-plans") {
       promptLines.push(
-        ``,
-        `## E2E 测试设计`,
-        ``,
-        `本项目包含前端页面, 请设计端到端 (E2E) 测试策略。`,
-        ``,
-        `### 基础设施`,
-        `- Dev server: \`${e2eCfg.devCommand}\` 启动在 ${e2eCfg.baseUrl}`,
-        `- 视口: ${vp}`,
-        ``,
-        `### 要求`,
-        `1. 设计 3-5 个核心用户场景（如: 访问首页 → 导航 → 交互 → 验证）`,
-        `2. 对每个场景指定:`,
-        `   - 测试步骤（用户操作序列）`,
-        `   - 预期结果（页面内容、URL、UI 状态）`,
-        `   - 视觉检查点（需要截图验证的关键元素）`,
-        `3. 在计划文档中列出这些场景`,
-        `4. 实施阶段会根据你的设计编写 Playwright 测试脚本`
+        "", "## E2E 测试设计", "",
+        "请设计 3-5 个核心 E2E 场景。",
+        "", "### 基础设施",
+        "- Dev server: `" + e2eCfg.devCommand + "` 启动在 " + e2eCfg.baseUrl,
+        "- 视口: " + vp,
+        "", "### 要求",
+        "1. 设计用户场景（访问首页 → 导航 → 交互 → 验证）",
+        "2. 每个场景指定: 步骤、预期结果、截图检查点",
+        "3. 计划文件放 " + (projectDir || "docs/superpowers") + "/plans/",
+        "4. 后续阶段会实现 Playwright 脚本",
       );
 
     } else if (e2eCfg && params.stage === "executing-plans") {
+      const ssDir = projectDir ? projectDir + "/screenshots" : "screenshots";
       promptLines.push(
-        ``,
-        `## E2E 测试实现`,
-        ``,
-        `请根据上一阶段设计的 E2E 场景, 用 Playwright 编写自动化测试。`,
-        ``,
-        `### 要求`,
-        `1. 安装 Playwright: \`npm install --save-dev playwright\``,
-        `2. 创建 tests/e2e/ 目录和测试文件`,
-        `3. 每个场景一个测试, 包含:`,
-        `   - 页面导航操作`,
-        `   - 用户交互`,
-        `   - 截图: \`await page.screenshot({ path: \`screenshots/<场景名>.png\` })\``,
-        `   - 断言 (URL、文本、元素可见性)`,
-        `4. 确保测试可独立运行: \`npx playwright test tests/e2e/\``,
-        `5. 提交后 verification 阶段会自动执行这些测试并查看截图`,
-        ``,
-        `### 基础设施`,
-        `- Dev server: \`${e2eCfg.devCommand}\` 启动在 ${e2eCfg.baseUrl}`,
-        `- 视口: ${vp}`
+        "", "## E2E 测试实现", "",
+        "根据上一阶段设计的 E2E 场景，用 Playwright 实现。",
+        "", "### 要求",
+        "1. 安装 Playwright: `npm install --save-dev playwright`",
+        "2. 创建 tests/e2e/ 目录编写测试",
+        "3. 每个场景含截图: await page.screenshot({ path: '" + ssDir + "/场景名.png' })",
+        "4. 断言 URL、文本、元素可见性",
+        "5. 测试可独立运行: `npx playwright test tests/e2e/`",
+        "", "### 基础设施",
+        "- Dev server: `" + e2eCfg.devCommand + "` 启动在 " + e2eCfg.baseUrl,
+        "- 视口: " + vp,
+        "- 代码目录: " + (projectDir ? projectDir + "/code/" : "当前目录"),
       );
 
     } else if (e2eCfg && params.stage === "verification") {
+      const ssDir = projectDir ? projectDir + "/screenshots" : "screenshots";
       promptLines.push(
-        ``,
-        `## E2E 视觉验证`,
-        ``,
-        `你需要执行前序阶段设计的 E2E 测试, 并通过截图验证页面渲染。`,
-        ``,
-        `### 步骤`,
-        `1. 启动 dev server: \`${e2eCfg.devCommand}\``,
-        `2. 运行 E2E 测试: \`npx playwright test tests/e2e/\``,
-        `   - 如果 tests/e2e/ 不存在, 用截图工具手动截图:`,
-        `     node "${screenshotScript}" --base-url ${e2eCfg.baseUrl} --paths / --viewport ${vp}`,
-        `3. 用 read 工具查看每张截图, 检查:`,
-        `   - 页面是否为完全空白 (白屏)`,
-        `   - 是否有渲染错误或控制台报错`,
-        `   - 布局是否正常, 关键 UI 元素是否可见`,
-        `4. 如果有页面异常, 分析原因并修复`,
-        `5. 修复后重新截图验证`,
-        ``,
-        `重要: 你必须\`亲眼\`看截图来验证, 不能只依赖状态码。`,
-        `前端渲染错误经常返回 200 但页面空白。`
+        "", "## E2E 视觉验证", "",
+        "执行前序阶段设计的 E2E 测试，通过截图验证页面渲染。",
+        "", "### 步骤",
+        "1. 启动 dev server: `" + e2eCfg.devCommand + "`",
+        "2. 运行测试: `npx playwright test tests/e2e/`",
+        "   - 如果 tests/e2e/ 不存在，手动截图:",
+        '     node "' + ssScript + '" --base-url ' + e2eCfg.baseUrl + " --output " + ssDir + " --paths / --viewport " + vp,
+        "3. 用 read 查看每张截图，检查:",
+        "   - 是否白屏、渲染错误",
+        "   - 布局、UI 元素是否正常",
+        "4. 异常则分析修复，重新截图验证",
+        "", "重要: 必须亲眼查看截图，不能只依赖状态码。",
       );
     }
 
@@ -333,29 +281,27 @@ async function main() {
           passImages = false;
 
           let userInput: string;
-          const answersPath = answersArg;
-          if (answersPath && answersPath !== "" && existsSync(answersPath)) {
-            // ── 从文件读取回答 ──
-            const allLines = readFileSync(answersPath, "utf-8").split("\n");
+          if (answersArg && existsSync(answersArg)) {
+            const allLines = readFileSync(answersArg, "utf-8").split("\n");
             const lineIdx = allLines.findIndex(function(l) {
               return l.trim() && !l.trim().startsWith("#");
             });
             if (lineIdx >= 0) {
               userInput = allLines[lineIdx].trim();
               allLines.splice(lineIdx, 1);
-              writeFileSync(answersPath, allLines.join("\n"), "utf-8");
-              console.log("\n  [从答案文件读取: " + userInput + "]");
+              writeFileSync(answersArg, allLines.join("\n"), "utf-8");
+              console.log("\n  [答案: " + userInput + "]");
             } else {
               userInput = "";
             }
           } else {
-            // ── 键盘交互 ──
             const rl = readline.createInterface({ input: rlInput, output: rlOutput });
-            userInput = await rl.question("\n  " + C.cyan + "\u270e 你的补充" + C.reset + " (直接回车结束本轮对话): ");
+            userInput = await rl.question("\n  " + C.cyan + "你的补充" + C.reset + " (回车结束): ");
             rl.close();
           }
           if (!userInput.trim()) break;
-          currentPrompt = userInput;        }
+          currentPrompt = userInput;
+        }
       } else {
         await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
       }
@@ -392,11 +338,11 @@ async function main() {
     }
   };
 
-  // 4. 执行工作流
+  // 执行工作流
   const stageNames = Object.keys(config.stages);
-  log(`${C.bold}🚀 my-llm-workflow${C.reset}`);
-  log(`${C.dim}   ${stageNames.length} 个阶段 | 配置: ${args.config}${C.reset}`);
-  log(`${C.dim}   ${"-".repeat(40)}${C.reset}`);
+  log(`${C.bold}my-llm-workflow${C.reset}`);
+  log(`${C.dim}  ${stageNames.length} 阶段 | ${args.config}${C.reset}`);
+  log(`${C.dim}  ${"-".repeat(35)}${C.reset}`);
 
   const report = await runWorkflow(
     {
@@ -405,35 +351,26 @@ async function main() {
       outputDir: config.outputDir,
       from: args.from,
       to: args.to,
-      onStageStart: (stage) => {
-        const idx = stageNames.indexOf(stage);
-        logStage(stage, idx, stageNames.length, config.stages[stage]);
-      },
-      onStageComplete: (record) => {
-        logStageResult(record, stageNames.indexOf(record.stage));
-      },
+      onStageStart: (stage) => logStage(stage, stageNames.indexOf(stage), stageNames.length, config.stages[stage]),
+      onStageComplete: (record) => logStageResult(record),
     },
-    stageRunner
+    stageRunner,
   );
 
-  // 5. 总结
-  const statusColor = report.status === "success" ? C.green : report.status === "partial" ? C.yellow : C.red;
-  const statusIcon = report.status === "success" ? "✅" : report.status === "partial" ? "⚠️" : "❌";
+  // 总结
+  const sc = report.status === "success" ? C.green : report.status === "partial" ? C.yellow : C.red;
+  const si = report.status === "success" ? "OK" : report.status === "partial" ? "WARN" : "FAIL";
+  log(`\n${C.bold}${sc}${si} 工作流: ${report.status}${C.reset}`);
+  log(`  ${C.dim}耗时: ${(report.totalDuration / 1000).toFixed(1)}s  | 成本: $${report.totalCost.toFixed(4)}${C.reset}`);
 
-  log(`\n${C.bold}${statusColor}${statusIcon} 工作流完成: ${report.status}${C.reset}`);
-  log(`  ${C.dim}总耗时: ${(report.totalDuration / 1000).toFixed(1)}s  | 总成本: $${report.totalCost.toFixed(4)}${C.reset}`);
-
-  // 列出所有产物
   const allArtifacts = report.stages.flatMap((r) => r.artifacts);
   if (allArtifacts.length > 0) {
-    log(`\n  产出物:`);
-    for (const a of allArtifacts) {
-      log(`    ${C.dim}• ${a}${C.reset}`);
-    }
+    log("  产出:");
+    for (const a of allArtifacts) log(`    ${C.dim}* ${a}${C.reset}`);
   }
 }
 
 main().catch((err) => {
-  console.error(`\x1b[31m错误: ${err.message}\x1b[0m`);
+  console.error("错误: " + err.message);
   process.exit(1);
 });
