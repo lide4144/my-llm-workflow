@@ -315,18 +315,15 @@ async function main() {
           turn++;
           passImages = false;
 
-          const lastLine = output.trim().split("\n").pop()?.trim() ?? "";
-          const waiting = /[?？]$/.test(lastLine) ||
-            /请选择|请回答|Which approach|选择|回车/.test(lastLine);
-          if (!waiting || turn >= maxTurns) break;
-
+          // 每轮都暂停，让用户决定是否继续
           const rl = readline.createInterface({ input: rlInput, output: rlOutput });
-          const answer = await rl.question("\n  " + C.cyan + "\u270e 你的回答" + C.reset + " (直接回车结束本轮): ");
+          const answer = await rl.question("\n  " + C.cyan + "\u270e 你的补充" + C.reset + " (直接回车结束本轮对话): ");
           rl.close();
+
           if (!answer.trim()) break;
           currentPrompt = answer;
         }
-      } else {
+      }
         await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
       }
 
