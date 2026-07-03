@@ -208,26 +208,6 @@ async function main() {
       if (event?.type === "message_end" && event?.message?.role === "assistant" && event?.message?.usage?.cost?.total) {
         cost += event.message.usage.cost.total;
       }
-      if (event?.type === "tool_call") {
-        // 拦截工具调用 — 重写错误路径, 拦截根目录 git
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-        if (event?.toolName === "write" && event?.input?.path && projectDir) {
-          const oldPath = event.input.path;
-          if (oldPath.includes("docs/superpowers")) {
-            const newPath = oldPath.replace(/docs\/superpowers/g, projectDir);
-            event.input.path = newPath;
-            process.stdout.write(C.dim + "[" + elapsed + "s] " + C.yellow + "路径重写: " + oldPath + " → " + newPath + C.reset + "\n");
-          }
-        }
-        if (event?.toolName === "bash" && event?.input?.command && projectDir) {
-          const cmd = event.input.command;
-          if (/\bgit (add|commit|push|init)\b/.test(cmd) && !cmd.includes(projectDir)) {
-            const msg = "[工作流引擎] 禁止在工作流根目录执行 git。请在 " + projectDir + "/code/ 下操作";
-            process.stdout.write(C.dim + "[" + elapsed + "s] " + C.red + msg + C.reset + "\n");
-            event.input.command = "echo '" + msg + "'";
-          }
-        }
-      }
       if (event?.type === "tool_execution_start") {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const cmd = event.toolName === "bash" ? (event.args?.command ?? "").substring(0, 80) : event.toolName;
@@ -252,20 +232,15 @@ async function main() {
 
     if (projectDir) {
       promptLines.push(
-        "", "", "!!! 重要: 输出目录规则（覆盖技能中的默认路径）", "",
-        "本项目使用以下目录结构，技能中提到的 docs/superpowers/ 已废弃，请勿使用:",
-        "- 阶段文档 → " + projectDir + "/<stage>/",
-        "- 计划文件 → " + projectDir + "/plans/",
-        "- 项目代码 → " + projectDir + "/code/",
-        "- E2E 截图 → " + projectDir + "/screenshots/",
+        "", "## 输出目录", "",
+        "所有产出物放在以下目录:",
+        "- 文档 → " + projectDir + "/<stage>/",
+        "- 计划 → " + projectDir + "/plans/",
+        "- 代码 → " + projectDir + "/code/",
+        "- 截图 → " + projectDir + "/screenshots/",
         "",
-        "不要写入 docs/superpowers/ 目录，不要在该目录下创建任何文件。",
-        "",
-        "!!! Git 规则: 本项目代码使用独立 git 仓库",
-        "",
-        "1. 在 " + projectDir + "/code/ 下初始化新的 git 仓库",
-        "2. 不要在工作流根目录执行 git add / git commit",
-        "3. 只在你自己的项目目录 (" + projectDir + "/code/) 中管理版本",
+        "项目代码使用独立 git 仓库，在 " + projectDir + "/code/ 下 init。",
+        "工作流根目录 (my-llm-workflow) 不要执行 git 操作。",
       );
     }
 
