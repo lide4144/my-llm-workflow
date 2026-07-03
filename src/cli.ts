@@ -10,11 +10,12 @@
  *   node src/cli.mjs --override executing-plans:claude-sonnet "覆盖模型的执行阶段"
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { loadConfig, type WorkflowConfig } from "./config.js";
 import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.js";
 import { createPiAgentFactory } from "./pi-agent-factory.js";
 import { saveArtifact } from "./artifact-store.js";
+import { runSetupWizard } from "./config-wizard.js";
 
 // ─── 简易命令行解析（无需外部依赖） ─────────────────────────────
 
@@ -24,17 +25,21 @@ function parseArgs(args: string[]): {
   from?: string;
   to?: string;
   overrides: Record<string, string>;
+  setup?: boolean;
 } {
   let config = "workflow.config.json";
   let from: string | undefined;
   let to: string | undefined;
+  let setup = false;
   const overrides: Record<string, string> = {};
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
-    if (arg === "--config" || arg === "-c") {
+    if (arg === "--setup" || arg === "-s") {
+      setup = true;
+    } else if (arg === "--config" || arg === "-c") {
       config = args[++i];
     } else if (arg === "--from") {
       from = args[++i];
@@ -53,7 +58,7 @@ function parseArgs(args: string[]): {
     }
   }
 
-  return { config, idea: positional.join(" ").trim(), from, to, overrides };
+  return { config, idea: positional.join(" ").trim(), from, to, overrides, setup };
 }
 
 // ─── 彩色的 log ─────────────────────────────────────────────────
@@ -99,8 +104,14 @@ function logStageResult(result: StageResult, index: number) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
+  if (args.setup) {
+    await runSetupWizard();
+    return;
+  }
+
   if (!args.idea) {
-    log(`${C.yellow}用法: node src/cli.mjs [选项] "项目描述"${C.reset}`);
+    log(`${C.yellow}用法: npm start -- [选项] "项目描述"${C.reset}`);
+    log(`   --setup, -s           交互式模型配置向导`);
     log(`   --config, -c <path>   配置文件路径 (默认: workflow.config.json)`);
     log(`   --from <stage>        起始阶段`);
     log(`   --to <stage>          结束阶段`);
