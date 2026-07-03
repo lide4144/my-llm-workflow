@@ -278,21 +278,84 @@ async function addCustomProvider(
     return;
   }
 
-  const baseUrl = await rl.question(`  API 地址 (如 http://localhost:11434/v1): `);
+  const baseUrl = await rl.question(`  API 地址 (如 http://localhost:11434): `);
   if (!baseUrl.trim()) {
     console.log(`  ${C.yellow}已取消${C.reset}`);
     return;
   }
 
+  // 自动补全 /v1 路径
+  let apiBase = baseUrl.trim().replace(/\/+$/, "");
+  if (!apiBase.endsWith("/v1")) {
+    apiBase += "/v1";
+  }
+
   const apiKey = await rl.question(`  API key (如不需要则回车跳过): `);
 
-  const modelIdsStr = await rl.question(
-    `  模型 ID (多个用逗号分隔, 如 llama3.1:8b,qwen2.5-coder:7b): `
-  );
-  const modelIds = modelIdsStr
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // ── 自动获取模型列表 ──────────────────────────────────────
+  console.log(`  ${C.dim}正在从 ${apiBase}/models 获取模型列表...${C.reset}`);
+
+  let modelIds: string[] = [];
+  let fetchFailed = false;
+
+  try {
+    const headers: Record<string, string> = { "Accept": "application/json" };
+    if (apiKey.trim()) {
+      headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+    }
+
+    const response = await fetch(`${apiBase}/models`, { headers, signal: AbortSignal.timeout(5000) });
+
+    if (response.ok) {
+      const data = await response.json() as any;
+
+      // OpenAI 兼容格式: { data: [{ id: "..." }, ...] }
+      if (data?.data && Array.isArray(data.data)) {
+        modelIds = data.data.map((m: any) => m.id).filter(Boolean);
+      }
+      // Ollama /api/tags 格式: { models: [{ name: "..." }, ...] }
+      else if (data?.models && Array.isArray(data.models)) {
+        modelIds = data.models.map((m: any) => m.name).filter(Boolean);
+      }
+
+      if (modelIds.length > 0) {
+        console.log(`  ${C.green}✓${C.reset} 发现 ${modelIds.length} 个模型:`);
+        for (const id of modelIds) {
+          console.log(`    ${C.cyan}•${C.reset} ${id}`);
+        }
+
+        const confirm = await rl.question(`  使用以上全部模型? (Y/n): `);
+        if (confirm.trim().toLowerCase() === "n") {
+          // 让用户选择要包含的模型
+          console.log(`  ${C.dim}输入要包含的模型 ID（多个用逗号分隔），或直接回车使用全部:${C.reset}`);
+          const pick = await rl.question(`  > `);
+          if (pick.trim()) {
+            modelIds = pick.split(",").map((s) => s.trim()).filter(Boolean);
+          }
+        }
+      } else {
+        console.log(`  ${C.yellow}⚠ 接口返回了空列表${C.reset}`);
+        fetchFailed = true;
+      }
+    } else {
+      console.log(`  ${C.yellow}⚠ 接口返回 ${response.status}，无法自动获取模型${C.reset}`);
+      fetchFailed = true;
+    }
+  } catch (err: any) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      console.log(`  ${C.yellow}⚠ 连接超时，请确认服务是否已启动${C.reset}`);
+    } else {
+      console.log(`  ${C.yellow}⚠ 无法连接: ${err?.message ?? err}${C.reset}`);
+    }
+    fetchFailed = true;
+  }
+
+  // 自动获取失败时，让用户手动输入
+  if (fetchFailed || modelIds.length === 0) {
+    console.log(`  ${C.dim}请手动输入模型 ID${C.reset}`);
+    const manual = await rl.question(`  模型 ID (多个用逗号分隔, 如 llama3.1:8b,qwen2.5-coder:7b): `);
+    modelIds = manual.split(",").map((s) => s.trim()).filter(Boolean);
+  }
 
   if (modelIds.length === 0) {
     console.log(`  ${C.yellow}至少需要一个模型 ID${C.reset}`);
@@ -301,7 +364,7 @@ async function addCustomProvider(
 
   if (!modelsConfig.providers) modelsConfig.providers = {};
   modelsConfig.providers[name.trim()] = {
-    baseUrl: baseUrl.trim(),
+    baseUrl: apiBase,
     api: "openai-completions",
     apiKey: apiKey.trim() || undefined,
     models: modelIds.map((id) => ({ id })),
@@ -309,6 +372,8 @@ async function addCustomProvider(
 
   writeModels(modelsConfig);
   console.log(`  ${C.green}✓${C.reset} 自定义 provider "${name}" 已保存到 ~/.pi/agent/models.json${C.reset}`);
+  console.log(`  ${C.dim}  地址: ${apiBase}${C.reset}`);
+  console.log(`  ${C.dim}  模型: ${modelIds.join(", ")}${C.reset}`);
 }
 
 // ═══════════════════════════════════════════════════════════════
