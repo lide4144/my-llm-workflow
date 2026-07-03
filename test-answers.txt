@@ -1,0 +1,5 @@
+# Brainstorming
+先做核心玩法
+# Writing-plans
+Inline Execution
+

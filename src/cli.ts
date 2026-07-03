@@ -10,7 +10,7 @@
  *   node src/cli.mjs --override executing-plans:claude-sonnet "覆盖模型的执行阶段"
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { loadConfig, type WorkflowConfig } from "./config.js";
 import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.js";
@@ -36,6 +36,8 @@ function parseArgs(args: string[]): {
   let from: string | undefined;
   let to: string | undefined;
   let setup = false;
+  let project: string | undefined;
+  let answers: string | undefined;
   const overrides: Record<string, string> = {};
   const images: string[] = [];
   const positional: string[] = [];
@@ -45,6 +47,10 @@ function parseArgs(args: string[]): {
 
     if (arg === "--setup" || arg === "-s") {
       setup = true;
+    } else if (arg === "--project" || arg === "-p") {
+      project = args[++i];
+    } else if (arg === "--answers" || arg === "-a") {
+      answers = args[++i];
     } else if (arg === "--config" || arg === "-c") {
       config = args[++i];
     } else if (arg === "--image" || arg === "-i") {
@@ -66,7 +72,7 @@ function parseArgs(args: string[]): {
     }
   }
 
-  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, setup };
+  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, project, answers, setup };
 }
 
 // ─── 彩色的 log ─────────────────────────────────────────────────
@@ -124,6 +130,8 @@ async function main() {
     log(`   --image, -i <path>     附加图片 (可重复使用)`);
     log(`   --from <stage>         起始阶段`);
     log(`   --to <stage>           结束阶段`);
+    log(`   --project, -p <name>   项目名称, 输出到 output_projects/<name>/`);
+    log(`   --answers, -a <path>   从文件读取回答 (替换键盘交互)`);
     log(`   --override, -o <s:m>   覆盖某阶段的模型, 如 "brainstorming:claude-sonnet"`);
     process.exit(1);
   }
@@ -134,7 +142,14 @@ async function main() {
     log(`请在当前目录创建 workflow.config.json，或使用 --config 指定路径。`);
     process.exit(1);
   }
-  const config = await loadConfig(args.config);
+  let config = await loadConfig(args.config);
+
+  // 如果指定了 --project, 输出到 output_projects/<project>/
+  if (args.project) {
+    const projectDir = "output_projects/" + args.project;
+    config.outputDir = projectDir;
+    log(`${C.dim}  \ud83d\udcc1 项目输出: ${projectDir}/${C.reset}`);
+  }
 
   // 2. 应用 overrides
   if (Object.keys(args.overrides).length > 0) {
@@ -176,6 +191,7 @@ async function main() {
   // 4. 创建生产 AgentFactory 和 StageRunner
   const agentFactory = createPiAgentFactory();
 
+  const answersArg = args.answers;
   const stageRunner: StageRunner = async (params) => {
     const startTime = Date.now();
     const session = await agentFactory.createSession({
@@ -193,6 +209,7 @@ async function main() {
       ) {
         const delta = event.assistantMessageEvent.delta ?? "";
         output += delta;
+        process.stdout.write(delta);
         params.onOutput?.(delta);
       }
       if (
@@ -315,15 +332,31 @@ async function main() {
           turn++;
           passImages = false;
 
-          // 每轮都暂停，让用户决定是否继续
-          const rl = readline.createInterface({ input: rlInput, output: rlOutput });
-          const answer = await rl.question("\n  " + C.cyan + "\u270e 你的补充" + C.reset + " (直接回车结束本轮对话): ");
-          rl.close();
-
-          if (!answer.trim()) break;
-          currentPrompt = answer;
-        }
-      }
+          let userInput: string;
+          const answersPath = answersArg;
+          if (answersPath && answersPath !== "" && existsSync(answersPath)) {
+            // ── 从文件读取回答 ──
+            const allLines = readFileSync(answersPath, "utf-8").split("\n");
+            const lineIdx = allLines.findIndex(function(l) {
+              return l.trim() && !l.trim().startsWith("#");
+            });
+            if (lineIdx >= 0) {
+              userInput = allLines[lineIdx].trim();
+              allLines.splice(lineIdx, 1);
+              writeFileSync(answersPath, allLines.join("\n"), "utf-8");
+              console.log("\n  [从答案文件读取: " + userInput + "]");
+            } else {
+              userInput = "";
+            }
+          } else {
+            // ── 键盘交互 ──
+            const rl = readline.createInterface({ input: rlInput, output: rlOutput });
+            userInput = await rl.question("\n  " + C.cyan + "\u270e 你的补充" + C.reset + " (直接回车结束本轮对话): ");
+            rl.close();
+          }
+          if (!userInput.trim()) break;
+          currentPrompt = userInput;        }
+      } else {
         await session.prompt(promptText, hasImages ? { images: loadedImages } : undefined);
       }
 
