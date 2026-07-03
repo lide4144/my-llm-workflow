@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, resolve } from "node:path";
 import { loadConfig, type WorkflowConfig } from "./config.js";
 import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.js";
 import { createPiAgentFactory } from "./pi-agent-factory.js";
@@ -202,7 +202,7 @@ async function main() {
       }
     });
 
-    const promptText = [
+    const promptLines = [
       `## 工作流阶段: ${params.stage}${params.config.label ? ` (${params.config.label})` : ""}`,
       ``,
       `模型: ${params.modelRef}`,
@@ -211,7 +211,43 @@ async function main() {
       `## 上下文`,
       ``,
       params.context,
-    ].join("\n");
+    ];
+
+    // 如果有 E2E 配置, 注入视觉验证指令
+    const e2e = params.config.e2e;
+    if (e2e) {
+      const screenshotScript = resolve(import.meta.dirname!, "e2e-screenshot.mjs");
+      const viewport = e2e.viewport ? `${e2e.viewport.width}x${e2e.viewport.height}` : "1280x720";
+
+      promptLines.push(
+        ``,
+        `## E2E 视觉验证`,
+        ``,
+        `本项目已启动在前端页面，你需要通过截图来验证页面渲染是否正确。`,
+        ``,
+        `### 步骤`,
+        `1. 确保 dev server 已启动 (或在当前终端启动)`,
+        `2. 使用截图工具获取页面截图:`,
+        `   node "${screenshotScript}" \\`,
+        `     --base-url ${e2e.baseUrl} \\`,
+        `     --paths ${e2e.paths.join(",")} \\`,
+        `     --viewport ${viewport} \\`,
+        `     --wait ${e2e.waitMs ?? 2000}`,
+        `3. 用 read 工具查看每张截图, 检查:`,
+        `   - 页面是否为完全空白 (白屏)`,
+        `   - 是否有渲染错误或控制台报错`,
+        `   - 布局是否正常, 关键 UI 元素是否可见`,
+        `   - 图片、图标、字体是否加载成功`,
+        `4. 如果有页面异常, 分析原因并修复`,
+        `5. 修复后重新截图验证`,
+        ``,
+        `重要: 你必须\`亲眼\`看截图来验证, 不能只依赖状态码。`,
+        `前端渲染错误经常返回 200 但页面空白。`,
+        `如果截图工具报告错误, 检查是否 dev server 未启动或端口不对。`
+      );
+    }
+
+    const promptText = promptLines.join("\n");
 
     try {
       // 传图片（仅第一阶段携带图片，后续阶段只传文字）

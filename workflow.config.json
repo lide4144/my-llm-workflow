@@ -2,32 +2,39 @@
   "outputDir": "docs/superpowers",
   "stages": {
     "brainstorming": {
-      "model": "My-Gemini/gemini-3.1-pro-preview",
       "label": "需求探讨与方案设计",
+      "model": "anthropic/claude-sonnet-4-20250514",
       "thinking": "high",
       "skill": "brainstorming",
       "onFailure": "stop"
     },
     "writing-plans": {
-      "model": "opencode-go/glm-5.2",
       "label": "编写实施计划",
+      "model": "openai/gpt-4o",
       "thinking": "medium",
       "skill": "writing-plans",
       "onFailure": "stop"
     },
     "executing-plans": {
-      "model": "opencode-go/deepseek-v4-flash",
       "label": "执行开发计划",
+      "model": "anthropic/claude-haiku-3-5-20241022",
       "thinking": "off",
       "skill": "subagent-driven-development",
       "onFailure": "continue"
     },
     "verification": {
-      "model": "openai-codex/gpt-5.5",
       "label": "验证与检查",
+      "model": "anthropic/claude-sonnet-4-20250514",
       "thinking": "low",
       "skill": "verification-before-completion",
-      "onFailure": "continue"
+      "onFailure": "continue",
+      "e2e": {
+        "devCommand": "npm run dev",
+        "baseUrl": "http://localhost:5173",
+        "paths": ["/"],
+        "viewport": { "width": 1280, "height": 720 },
+        "waitMs": 2000
+      }
     }
   }
 }

@@ -140,4 +140,45 @@ describe("validateConfig", () => {
       validateConfig({ outputDir: "", stages: { test: { model: "x/y" } } })
     ).toThrow(/outputDir/i);
   });
+
+  it("e2e 配置合法时正确解析", () => {
+    const config = validateConfig({
+      outputDir: "out",
+      stages: {
+        test: {
+          model: "x/y",
+          e2e: {
+            devCommand: "npm run dev",
+            baseUrl: "http://localhost:5173",
+            paths: ["/", "/about"],
+            waitMs: 3000,
+          },
+        },
+      },
+    });
+
+    expect(config.stages.test.e2e).toBeDefined();
+    expect(config.stages.test.e2e!.devCommand).toBe("npm run dev");
+    expect(config.stages.test.e2e!.baseUrl).toBe("http://localhost:5173");
+    expect(config.stages.test.e2e!.paths).toEqual(["/", "/about"]);
+    expect(config.stages.test.e2e!.waitMs).toBe(3000);
+  });
+
+  it("e2e.paths 为空数组时抛出错误", () => {
+    expect(() =>
+      validateConfig({
+        outputDir: "out",
+        stages: { test: { model: "x/y", e2e: { devCommand: "a", baseUrl: "b", paths: [] } } },
+      })
+    ).toThrow(/paths/i);
+  });
+
+  it("e2e.devCommand 缺少时抛出错误", () => {
+    expect(() =>
+      validateConfig({
+        outputDir: "out",
+        stages: { test: { model: "x/y", e2e: { baseUrl: "b", paths: ["/"] } } },
+      })
+    ).toThrow(/devCommand/i);
+  });
 });

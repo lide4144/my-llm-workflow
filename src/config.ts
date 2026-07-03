@@ -6,6 +6,20 @@ export type FailureStrategy = "stop" | "continue";
 /** 思考模式 */
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh";
 
+/** E2E 视觉验证配置 */
+export interface E2EConfig {
+  /** 启动 dev server 的命令, 如 "npm run dev" */
+  devCommand: string;
+  /** 应用的基础 URL, 如 "http://localhost:5173" */
+  baseUrl: string;
+  /** 需要截图的页面路径列表, 如 ["/", "/about"] */
+  paths: string[];
+  /** 视口尺寸, 默认 1280x720 */
+  viewport?: { width: number; height: number };
+  /** 页面加载后等待的毫秒数, 默认 2000 */
+  waitMs?: number;
+}
+
 /** 单个阶段的配置 */
 export interface StageConfig {
   model: string;
@@ -13,6 +27,8 @@ export interface StageConfig {
   thinking?: ThinkingLevel;
   skill?: string;
   onFailure?: FailureStrategy;
+  /** E2E 视觉验证配置 (仅 verification 阶段有效) */
+  e2e?: E2EConfig;
 }
 
 /** 完整的工作流配置 */
@@ -70,6 +86,7 @@ export function validateConfig(raw: unknown): WorkflowConfig {
       thinking: validateThinkingLevel(s.thinking),
       skill: typeof s.skill === "string" ? s.skill : undefined,
       onFailure: validateFailureStrategy(s.onFailure),
+      e2e: validateE2EConfig(s.e2e),
     };
   }
 
@@ -84,6 +101,32 @@ function validateThinkingLevel(val: unknown): ThinkingLevel | undefined {
   if (val === undefined || val === null) return undefined;
   if (typeof val === "string" && VALID.has(val)) return val as ThinkingLevel;
   throw new Error(`thinking 必须是 off/low/medium/high/xhigh 之一，收到: ${val}`);
+}
+
+function validateE2EConfig(val: unknown): E2EConfig | undefined {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val !== "object" || val === null) {
+    throw new Error("e2e 配置必须是对象");
+  }
+  const e = val as Record<string, unknown>;
+  if (typeof e.devCommand !== "string" || !e.devCommand) {
+    throw new Error("e2e.devCommand 必须是非空字符串");
+  }
+  if (typeof e.baseUrl !== "string" || !e.baseUrl) {
+    throw new Error("e2e.baseUrl 必须是非空字符串");
+  }
+  if (!Array.isArray(e.paths) || e.paths.length === 0) {
+    throw new Error("e2e.paths 必须是非空数组");
+  }
+  return {
+    devCommand: e.devCommand,
+    baseUrl: e.baseUrl,
+    paths: e.paths.map(String),
+    viewport: e.viewport && typeof e.viewport === "object"
+      ? { width: Number((e.viewport as any).width) || 1280, height: Number((e.viewport as any).height) || 720 }
+      : undefined,
+    waitMs: typeof e.waitMs === "number" ? e.waitMs : 2000,
+  };
 }
 
 function validateFailureStrategy(val: unknown): FailureStrategy | undefined {
