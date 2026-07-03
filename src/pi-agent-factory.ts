@@ -3,6 +3,8 @@ import {
   ModelRegistry,
   createAgentSession,
   SessionManager,
+  createBashTool,
+  type Tool,
 } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "./model-resolver.js";
 import type { AgentFactory, AgentSession } from "./stage-runner.js";
@@ -14,10 +16,26 @@ export function createPiAgentFactory(
   deps?: {
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
+    projectDir?: string;
   }
 ): AgentFactory {
   const authStorage = deps?.authStorage ?? AuthStorage.create();
   const modelRegistry = deps?.modelRegistry ?? ModelRegistry.create(authStorage);
+  const projectDir = deps?.projectDir;
+
+  // 包装 bash 工具: 拦截在工作流根目录的 git 操作
+  const originalBash = createBashTool(process.cwd());
+  const wrappedBash: Tool = {
+    ...originalBash,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const cmd = (params?.command ?? "") as string;
+      if (projectDir && /\bgit (add|commit|push|init)\b/.test(cmd) && !cmd.includes(projectDir)) {
+        const msg = "[引擎] 禁止在工作流根目录执行 git，请在 " + projectDir + "/code/ 下操作";
+        return { content: [{ type: "text", text: msg }], details: {}, isError: true };
+      }
+      return originalBash.execute!(toolCallId, params, signal, onUpdate, ctx);
+    },
+  };
 
   return {
     async createSession(options) {
@@ -38,6 +56,7 @@ export function createPiAgentFactory(
         modelRegistry,
         sessionManager: SessionManager.inMemory(),
         tools: ["read", "bash", "edit", "write"],
+        customTools: [wrappedBash],
       });
 
       return new PiAgentSessionWrapper(piSession);
