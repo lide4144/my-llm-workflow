@@ -1,13 +1,56 @@
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   AuthStorage,
   ModelRegistry,
   createAgentSession,
   SessionManager,
   createBashTool,
+  createExtensionRuntime,
   type Tool,
+  type ResourceLoader,
+  type Skill,
 } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "./model-resolver.js";
 import type { AgentFactory, AgentSession } from "./stage-runner.js";
+
+/**
+ * 创建只加载本地 .pi/skills/ 的 ResourceLoader，完全忽略全局 skill。
+ */
+function createLocalSkillsLoader(): ResourceLoader {
+  const cwd = process.cwd();
+  const skillsDir = join(cwd, ".pi", "skills");
+  const localSkills: Skill[] = [];
+
+  if (existsSync(skillsDir)) {
+    const entries = readdirSync(skillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = join(skillsDir, entry.name);
+      const skillFile = join(skillDir, "SKILL.md");
+      if (!existsSync(skillFile)) continue;
+      localSkills.push({
+        name: entry.name,
+        description: entry.name,
+        filePath: skillFile,
+        baseDir: skillDir,
+        source: "project",
+      });
+    }
+  }
+
+  return {
+    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+    getSkills: () => ({ skills: localSkills, diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
+    getThemes: () => ({ themes: [], diagnostics: [] }),
+    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getSystemPrompt: () => "",
+    getAppendSystemPrompt: () => [],
+    extendResources: () => {},
+    reload: async () => {},
+  };
+}
 
 /**
  * 创建生产环境的 AgentFactory，使用真实的 pi SDK。
@@ -55,6 +98,7 @@ export function createPiAgentFactory(
         authStorage,
         modelRegistry,
         sessionManager: SessionManager.inMemory(),
+        resourceLoader: createLocalSkillsLoader(),
         tools: ["read", "bash", "edit", "write"],
         customTools: [wrappedBash],
       });

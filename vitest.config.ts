@@ -8,6 +8,7 @@ export default defineConfig({
       "snake-game/**",
       "snake-server/**",
       "screenshots/**",
+      "output_projects/**",
       "**/*.spec.js",
       "**/*.spec.ts",
     ],
