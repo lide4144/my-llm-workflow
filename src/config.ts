@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 /** 每个阶段的失败处理策略 */
 export type FailureStrategy = "stop" | "continue";
 
+/** 失败后的重试次数 (默认 0 = 不重试) */
+export type RetryCount = number;
+
 /** 思考模式 */
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh";
 
@@ -25,6 +28,8 @@ export interface StageConfig {
   thinking?: ThinkingLevel;
   skill?: string;
   onFailure?: FailureStrategy;
+  /** 失败后自动重试次数 (默认 0 = 不重试) */
+  retry?: number;
   /** 是否支持多轮交互（agent 问问题后可暂停等待用户回答） */
   interactive?: boolean;
   /** E2E 视觉验证配置 (仅 verification 阶段有效) */
@@ -86,6 +91,7 @@ export function validateConfig(raw: unknown): WorkflowConfig {
       thinking: validateThinkingLevel(s.thinking),
       skill: typeof s.skill === "string" ? s.skill : undefined,
       onFailure: validateFailureStrategy(s.onFailure),
+      retry: validateRetryCount(s.retry),
       interactive: s.interactive === true,
       e2e: validateE2EConfig(s.e2e),
     };
@@ -131,4 +137,10 @@ function validateFailureStrategy(val: unknown): FailureStrategy | undefined {
   if (val === undefined || val === null) return undefined;
   if (typeof val === "string" && VALID.has(val)) return val as FailureStrategy;
   throw new Error(`onFailure 必须是 stop/continue 之一，收到: ${val}`);
+}
+
+function validateRetryCount(val: unknown): number | undefined {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val === "number" && Number.isInteger(val) && val >= 0) return val;
+  throw new Error(`retry 必须是非负整数，收到: ${val}`);
 }

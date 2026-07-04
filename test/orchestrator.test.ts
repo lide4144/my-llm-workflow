@@ -189,4 +189,73 @@ describe("runWorkflow", () => {
     expect(report.stages).toHaveLength(2);
     expect(report.totalCost).toBeCloseTo(0.10, 5);
   });
+
+  it("stage 失败且有 retry 时自动重试，成功即停止重试", async () => {
+    const config: WorkflowConfig = {
+      outputDir: "docs",
+      stages: {
+        brainstorming: {
+          model: "x/y",
+          retry: 2,
+          onFailure: "stop",
+        },
+      },
+    };
+    const stageRunner = vi.fn();
+    // 前2次失败，第3次成功
+    stageRunner
+      .mockResolvedValueOnce({
+        stage: "brainstorming", model: "x/y", status: "failure",
+        duration: 50, cost: 0, outputDir, artifacts: [], error: "网络超时",
+      })
+      .mockResolvedValueOnce({
+        stage: "brainstorming", model: "x/y", status: "failure",
+        duration: 50, cost: 0, outputDir, artifacts: [], error: "安装失败",
+      })
+      .mockResolvedValueOnce({
+        stage: "brainstorming", model: "x/y", status: "success",
+        duration: 100, cost: 0.05, outputDir, artifacts: ["design.md"],
+      });
+
+    const report = await runWorkflow(
+      { config, idea: "test", outputDir },
+      stageRunner
+    );
+
+    // 总共调了3次 (1次原始 + 2次重试)，第3次成功
+    expect(stageRunner).toHaveBeenCalledTimes(3);
+    expect(report.stages).toHaveLength(1);
+    expect(report.stages[0].status).toBe("success");
+    expect(report.status).toBe("success");
+  });
+
+  it("stage 失败超过 retry 次数后停止重试", async () => {
+    const config: WorkflowConfig = {
+      outputDir: "docs",
+      stages: {
+        brainstorming: {
+          model: "x/y",
+          retry: 1,
+          onFailure: "stop",
+        },
+      },
+    };
+    const stageRunner = vi.fn();
+    // 每次都失败
+    stageRunner.mockResolvedValue({
+      stage: "brainstorming", model: "x/y", status: "failure",
+      duration: 50, cost: 0, outputDir, artifacts: [], error: "始终失败",
+    });
+
+    const report = await runWorkflow(
+      { config, idea: "test", outputDir },
+      stageRunner
+    );
+
+    // retry: 1 意味着最多 2 次尝试 (原始 + 1 次重试)
+    expect(stageRunner).toHaveBeenCalledTimes(2);
+    expect(report.stages).toHaveLength(1);
+    expect(report.stages[0].status).toBe("failure");
+    expect(report.status).toBe("failure");
+  });
 });

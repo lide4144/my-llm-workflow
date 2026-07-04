@@ -3,13 +3,23 @@
  * my-llm-workflow CLI 入口
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
 import { loadConfig, type WorkflowConfig } from "./config.js";
 import { runWorkflow, type StageRunner, type StageResult } from "./orchestrator.js";
 import { createPiAgentFactory } from "./pi-agent-factory.js";
 import { saveArtifact } from "./artifact-store.js";
 import { runSetupWizard } from "./config-wizard.js";
+import {
+  loadState,
+  saveState,
+  createState,
+  markStageComplete,
+  findResumeStage,
+  rebuildContext,
+  getStatePath,
+  type WorkflowState,
+} from "./workflow-state.js";
 import * as readline from "node:readline/promises";
 import { stdin as rlInput, stdout as rlOutput } from "node:process";
 import type { ImageInput } from "./stage-runner.js";
@@ -23,6 +33,7 @@ function parseArgs(args: string[]) {
   let setup = false;
   let project: string | undefined;
   let answers: string | undefined;
+  let resume = false;
   const overrides: Record<string, string> = {};
   const images: string[] = [];
   const positional: string[] = [];
@@ -36,13 +47,14 @@ function parseArgs(args: string[]) {
     else if (arg === "--image" || arg === "-i") { images.push(args[++i]); }
     else if (arg === "--from") { from = args[++i]; }
     else if (arg === "--to") { to = args[++i]; }
+    else if (arg === "--continue" || arg === "-C") { resume = true; }
     else if (arg === "--override" || arg === "-o") {
       const val = args[++i]; const ci = val.indexOf(":");
       if (ci > 0) overrides[val.slice(0, ci)] = val.slice(ci + 1);
     } else if (arg === "--help" || arg === "-h") { positional.push("--help"); break; }
     else if (!arg.startsWith("--")) { positional.push(arg); }
   }
-  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, project, answers, setup };
+  return { config, idea: positional.join(" ").trim(), from, to, overrides, images, project, answers, setup, resume };
 }
 
 // ─── 彩色 log ───────────────────────────────────────────────
@@ -123,6 +135,63 @@ function logStageResult(r: StageResult) {
   for (const a of r.artifacts) process.stdout.write("    " + C.dim + a + C.reset + "\n");
 }
 
+// ─── 工具函数 ───────────────────────────────────────────────
+
+/**
+ * 扫描 output_projects/，找到最近更新且未完成的工作流。
+ * 返回项目目录名（如 "project-1"），没有则返回 null。
+ */
+function findLastUnfinishedProject(): string | null {
+  const outputParent = "output_projects";
+  if (!existsSync(outputParent)) return null;
+
+  const dirs = readdirSync(outputParent, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+
+  let latest: { name: string; time: number } | null = null;
+
+  for (const name of dirs) {
+    const statePath = join(outputParent, name, ".workflow-state.json");
+    if (!existsSync(statePath)) continue;
+    try {
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      if (state.completed) continue;
+      const updated = new Date(state.updatedAt).getTime();
+      if (!latest || updated > latest.time) {
+        latest = { name, time: updated };
+      }
+    } catch {}
+  }
+
+  return latest?.name ?? null;
+}
+
+/**
+ * 生成默认项目目录名：project-1, project-2, ... project-n。
+ * 自动检测 output_projects/ 下已有 project-* 目录，避免冲突。
+ */
+function nextProjectName(): string {
+  const outputParent = "output_projects";
+  let maxNum = 0;
+
+  if (existsSync(outputParent)) {
+    const existing = readdirSync(outputParent, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    for (const name of existing) {
+      const match = name.match(/^project-(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+  }
+
+  return "project-" + (maxNum + 1);
+}
+
 // ─── 主流程 ─────────────────────────────────────────────────
 
 async function main() {
@@ -130,13 +199,19 @@ async function main() {
 
   if (args.setup) { await runSetupWizard(); return; }
 
-  if (!args.idea || args.idea === "--help") {
+  // --continue 不需要 idea，直接从状态文件恢复
+  const isResume = args.resume;
+
+  if ((!args.idea && !isResume) || args.idea === "--help") {
     console.log("");
     console.log("my-llm-workflow — 多 Agent LLM 工作流编排器");
     console.log("");
     console.log("用法:");
     console.log("  npm start -- \"项目描述\"");
     console.log("  npm start -- --project myapp --answers ans.txt \"项目描述\"");
+    console.log("");
+    console.log("默认输出: output_projects/project-1/   (自动递增序号)");
+    console.log("  用 --project 可自定义名称，输出到 output_projects/<名称>/");
     console.log("");
     console.log("工作流阶段 (4步):");
     console.log("  1. brainstorming  — Gemini 3.1 Pro 充实方案");
@@ -146,6 +221,8 @@ async function main() {
     console.log("");
     console.log("选项:");
     console.log("  --project, -p <name>   项目名称, 输出到 output_projects/<name>/");
+    console.log("                           不传则自动使用 project-1, project-2...");
+    console.log("  --continue, -C         从上次中断处继续执行工作流");
     console.log("  --answers, -a <path>   从文件读取多轮回答");
     console.log("  --config, -c <path>    配置文件 (默认: workflow.config.json)");
     console.log("  --from <stage>         起始阶段");
@@ -169,8 +246,27 @@ async function main() {
   if (!existsSync(args.config)) { console.log("找不到: " + args.config); process.exit(1); }
   let config = await loadConfig(args.config);
   activeConfig = config;
-  const projectDir = args.project ? "output_projects/" + args.project : null;
-  if (projectDir) { config.outputDir = projectDir; console.log("项目输出: " + projectDir); }
+  // 统一输出目录：有 --project 用指定名称，否则用 project-N 序号
+  // --continue 时自动从上一次的项目恢复
+  let projectName: string;
+  let projectDir: string;
+
+  if (isResume && !args.project) {
+    // 自动查找最近未完成的工作流
+    const found = findLastUnfinishedProject();
+    if (!found) {
+      console.log(C.red + "没有找到可恢复的工作流。用 --project 指定项目名称，或直接传项目描述开始新工作流。" + C.reset);
+      process.exit(1);
+    }
+    projectName = found;
+    projectDir = "output_projects/" + found;
+    console.log(C.cyan + "恢复项目: " + projectDir + C.reset);
+  } else {
+    projectName = args.project || nextProjectName();
+    projectDir = "output_projects/" + projectName;
+    console.log("项目输出: " + projectDir);
+  }
+  config.outputDir = projectDir;
 
   for (const [stage, model] of Object.entries(args.overrides)) {
     if (config.stages[stage]) { config.stages[stage].model = model; }
@@ -188,6 +284,36 @@ async function main() {
 
   const agentFactory = createPiAgentFactory(projectDir ? { projectDir } : undefined);
   const answersArg = args.answers;
+  const stageNames = Object.keys(config.stages);
+
+  // ── 工作流状态管理 ──────────────────────────────────────
+  let workflowState: WorkflowState;
+  let resumeFrom: string | undefined;
+
+  if (args.resume) {
+    // --continue 模式：从状态文件恢复
+    const loaded = loadState(projectDir);
+    if (!loaded) {
+      console.log(C.red + "没有找到可恢复的工作流状态: " + getStatePath(projectDir) + C.reset);
+      console.log("请检查项目目录是否正确，或直接传项目描述开始新工作流。");
+      process.exit(1);
+    }
+    if (loaded.completed) {
+      console.log(C.yellow + "工作流已完成，无需继续。" + C.reset);
+      process.exit(0);
+    }
+    workflowState = loaded;
+    resumeFrom = findResumeStage(loaded, stageNames) || undefined;
+    if (!resumeFrom) {
+      console.log(C.yellow + "所有阶段已完成。" + C.reset);
+      process.exit(0);
+    }
+    console.log(C.cyan + "恢复工作流: 从 " + resumeFrom + " 阶段继续" + C.reset);
+  } else {
+    // 新工作流：创建初始状态
+    workflowState = createState(projectName, args.idea, stageNames);
+    saveState(projectDir, workflowState);
+  }
 
   const stageRunner: StageRunner = async (params) => {
     const startTime = Date.now();
@@ -251,7 +377,7 @@ async function main() {
     if (e2eCfg && params.stage === "brainstorming") {
       promptLines.push("", "## E2E 测试策略", "", "项目包含前端页面，请在设计中考虑 E2E 测试需求。", "注明哪些功能点需要截图验证。");
     } else if (e2eCfg && params.stage === "writing-plans") {
-      promptLines.push("", "## E2E 测试设计", "", "请设计 3-5 个核心 E2E 场景。", "- Dev server: " + e2eCfg.devCommand + " -> " + e2eCfg.baseUrl, "- 视口: " + vp, "计划文件放 " + (projectDir || "docs/superpowers") + "/plans/");
+      promptLines.push("", "## E2E 测试设计", "", "请设计 3-5 个核心 E2E 场景。", "- Dev server: " + e2eCfg.devCommand + " -> " + e2eCfg.baseUrl, "- 视口: " + vp, "计划文件放 " + projectDir + "/plans/");
     } else if (e2eCfg && params.stage === "executing-plans") {
       const ssD = projectDir ? projectDir + "/screenshots" : "screenshots";
       promptLines.push("", "## E2E 测试实现", "", "根据上一阶段设计的场景用 Playwright 实现。", "截图: await page.screenshot({ path: '" + ssD + "/场景名.png' })", "代码目录: " + (projectDir ? projectDir + "/code/" : "当前目录"));
@@ -310,17 +436,30 @@ async function main() {
   };
 
   // 执行工作流
-  const stageNames = Object.keys(config.stages);
+  // --continue 时重建 context（跳过已完成阶段）
+  const contextIdea = args.resume
+    ? rebuildContext(workflowState, config.outputDir, stageNames)
+    : args.idea;
 
   const report = await runWorkflow(
     {
-      config, idea: args.idea, outputDir: config.outputDir,
-      from: args.from, to: args.to,
+      config, idea: contextIdea, outputDir: config.outputDir,
+      from: args.resume ? resumeFrom : args.from,
+      to: args.to,
       onStageStart: (stage) => logStage(stage, stageNames.indexOf(stage), stageNames.length, config.stages[stage]),
-      onStageComplete: (record) => logStageResult(record),
+      onStageComplete: (record) => {
+        logStageResult(record);
+        // 每阶段完成后保存状态
+        markStageComplete(workflowState, record.stage, record);
+        saveState(projectDir, workflowState);
+      },
     },
     stageRunner,
   );
+
+  // 更新完成状态
+  workflowState.completed = report.status === "success";
+  saveState(projectDir, workflowState);
 
   const sc = report.status === "success" ? C.green : report.status === "partial" ? C.yellow : C.red;
   const si = report.status === "success" ? "OK" : report.status === "partial" ? "WARN" : "FAIL";

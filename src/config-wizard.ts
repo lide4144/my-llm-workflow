@@ -500,7 +500,7 @@ function createDefaultConfig(choices: Array<{ label: string }>): WorkflowConfig 
     choices[Math.min(idx, choices.length - 1)]?.label ?? choices[0]?.label ?? "unknown/model";
 
   return {
-    outputDir: "docs/superpowers",
+    outputDir: "output_projects",
     stages: {
       brainstorming: {
         label: "需求探讨与方案设计",

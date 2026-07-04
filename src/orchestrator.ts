@@ -88,17 +88,29 @@ export async function runWorkflow(
 
   for (const name of orderedStages) {
     const stageConfig = config.stages[name];
+    const maxAttempts = (stageConfig.retry ?? 0) + 1;
+    let lastResult: StageResult | null = null;
 
-    options.onStageStart?.(name);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        process.stdout.write("  [重试 " + name + "] 第 " + attempt + "/" + maxAttempts + " 次...\n");
+      }
 
-    const result = await stageRunner({
-      stage: name,
-      config: stageConfig,
-      context,
-      modelRef: stageConfig.model,
-      outputDir,
-    });
+      options.onStageStart?.(name);
 
+      lastResult = await stageRunner({
+        stage: name,
+        config: stageConfig,
+        context,
+        modelRef: stageConfig.model,
+        outputDir,
+      });
+
+      // 成功则跳出重试循环
+      if (lastResult.status === "success") break;
+    }
+
+    const result = lastResult!;
     const record: StageRecord = {
       ...result,
       config: stageConfig,
