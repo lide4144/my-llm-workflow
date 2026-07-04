@@ -55,9 +55,9 @@ npm start -- --setup
 >
 > **如果没有任何已配置的 provider**，选一个编号输入 API key。比如选 `1` (anthropic)，输入 `sk-ant-...`。或者用环境变量：`export ANTHROPIC_API_KEY=sk-...`。
 
-### 选 35 号完成配置
+### 选号完成配置
 
-配置好 key 后，选 35 号进入模型选择界面。为每个阶段选一个可用的模型：
+配置好 key 后，选对应编号进入模型选择界面。为每个阶段选一个可用的模型：
 
 ```
 阶段 1/4: brainstorming (需求探讨与方案设计)
@@ -73,10 +73,12 @@ npm start -- --setup
 
 ```json
 {
-  "brainstorming": { "model": "opencode-go/kimi-k2.7-code" },
-  "writing-plans": { "model": "opencode-go/qwen3.7-max" },
-  "executing-plans": { "model": "opencode-go/deepseek-v4-flash" },
-  "verification":  { "model": "openai-codex/gpt-5.5" }
+  "stages": {
+    "brainstorming": { "model": "opencode-go/kimi-k2.7-code" },
+    "writing-plans": { "model": "opencode-go/qwen3.7-max" },
+    "executing-plans": { "model": "opencode-go/deepseek-v4-flash" },
+    "verification":  { "model": "openai-codex/gpt-5.5" }
+  }
 }
 ```
 
@@ -85,12 +87,14 @@ npm start -- --setup
 ## 第二步：跑第一个项目（交互模式）
 
 ```bash
-npm start -- --project tomato-cli "做一个番茄钟 CLI 工具"
+npm start -- "做一个番茄钟 CLI 工具"
 ```
 
 你会看到：
 
 ```
+项目输出: output_projects/project-1
+
 工作流管道
   >> brainstorming 0s  (配置好的模型)
   .. writing-plans
@@ -98,6 +102,8 @@ npm start -- --project tomato-cli "做一个番茄钟 CLI 工具"
   .. verification
   -----------------------------------
 ```
+
+不传 `--project` 时，系统会自动使用递增的 `project-1`、`project-2`... 作为项目目录。
 
 ### 和 brainstorming Agent 对话
 
@@ -145,7 +151,54 @@ Agent: 我根据设计方案制定实施计划...
 
 ---
 
-## 第三步：用答案文件自动化
+## 第三步：中断恢复
+
+如果工作流因为网络问题、Ctrl+C 或其他原因中断，不用担心。
+
+工作流会每完成一个阶段就保存状态。中断后只需要：
+
+```bash
+# 自动检测最近的未完成项目，从断点处继续
+npm start -- --continue
+
+# 或短选项
+npm start -- -C
+```
+
+恢复后管道图会显示：
+
+```
+工作流管道
+  OK brainstorming (45.0s)      ← 已完成
+  OK writing-plans  (30.0s)     ← 已完成
+  >> executing-plans 0s         ← 从这里继续
+  .. verification
+  -----------------------------------
+```
+
+也可以指定具体项目恢复：
+
+```bash
+npm start -- --continue --project tomato-cli
+```
+
+### 自动重试
+
+像 `npm install` 或 `playwright install` 这类网络操作失败时，工作流会自动重试：
+
+```
+[120s] ⚙ npx playwright install chromium
+[120s] FAIL
+  [重试 verification] 第 2/3 次...
+[125s] ⚙ npx playwright install chromium  ← 自动重试
+[130s] OK
+```
+
+默认 `executing-plans` 和 `verification` 阶段各会重试 2 次。
+
+---
+
+## 第四步：用答案文件自动化
 
 如果你不想守在终端前打字，可以预先准备回答。
 
@@ -188,10 +241,11 @@ npm start -- --project tomato-cli --answers my_answers.txt "做一个番茄钟 C
 - **先少写几个答案**，跑一次看看 agent 问了几个问题
 - **记下问题数**，下次补全答案文件
 - 也可以写一个通用答案模版，不同项目微调
+- 如果中断了，改完答案后用 `--continue` 恢复
 
 ---
 
-## 第四步：E2E 视觉验证（有前端时）
+## 第五步：E2E 视觉验证（有前端时）
 
 如果你的项目包含前端页面，可以配置 visual E2E 验证。
 
@@ -203,6 +257,7 @@ npm start -- --project tomato-cli --answers my_answers.txt "做一个番茄钟 C
 {
   "verification": {
     "model": "openai-codex/gpt-5.5",
+    "retry": 2,
     "e2e": {
       "devCommand": "cd output_projects/todo-app/code/app && npm run dev",
       "baseUrl": "http://localhost:5173",
@@ -232,12 +287,13 @@ npm start -- --project tomato-cli --answers my_answers.txt "做一个番茄钟 C
 
 ---
 
-## 第五步：理解产出物
+## 第六步：理解产出物
 
-运行完成后，输出目录结构如下（如果用 `--project`）：
+运行完成后，输出目录结构如下：
 
 ```
 output_projects/tomato-cli/
+├── .workflow-state.json                 ← 工作流状态（断点续跑用）
 ├── brainstorming/
 │   └── stage-brainstorming-output.md    ← 设计方案
 ├── writing-plans/
@@ -245,12 +301,13 @@ output_projects/tomato-cli/
 │   └── plans/
 │       └── 2026-07-04-tomato-cli.md     ← 实施计划
 ├── executing-plans/
-│   └── stage-executing-plans-output.md  ← 实现记录
+│   ├── stage-executing-plans-output.md  ← 实现记录
+│   └── code/                            ← 项目代码（独立 git 仓库）
 └── verification/
     └── stage-verification-output.md     ← 验证报告
 ```
 
-项目代码会被 agent 创建在 `output_projects/tomato-cli/code/` 下。
+> 没有传 `--project` 时会自动创建 `output_projects/project-1/`、`project-2/`... 依次递增。
 
 ---
 
@@ -277,7 +334,15 @@ npm start -- --override brainstorming:opencode-go/kimi-k2.7-code "项目"
 
 - `executing-plans` 阶段最耗时（可能 10 分钟以上）
 - 观察工具调用日志 `[120s] ⚙ bash ...` 了解进度
-- 如果实在等不及，Ctrl+C 中断，下次用 `--from` 继续：
+- 如果实在等不及，Ctrl+C 中断，然后用 `--continue` 恢复：
+
+```bash
+npm start -- --continue
+```
+
+### 状态文件损坏
+
+如果 `.workflow-state.json` 文件损坏，`--continue` 会提示找不到可恢复的工作流。可以用 `--from` 手动指定起始阶段：
 
 ```bash
 npm start -- --from verification "项目描述"
@@ -287,5 +352,5 @@ npm start -- --from verification "项目描述"
 
 ```bash
 npm test
-# 37 tests passing
+# 60 tests passing
 ```

@@ -17,6 +17,8 @@
 
 - **多 Agent 隔离** — 每阶段使用独立 session + 可配置的不同模型
 - **多轮交互** — brainstorming / writing-plans 阶段支持对话，agent 问问题、用户回答、再继续
+- **断点续跑** — 中断后 `npm start -- --continue` 自动从断点处恢复
+- **自动重试** — 阶段失败后自动重试（可配置重试次数），解决网络波动等临时故障
 - **自动化测试支持** — `--answers` 文件模式，可预设多轮回答自动跑完交互阶段
 - **E2E 视觉验证** — verification 阶段可配置 Playwright 截图，agent 用 `read` 工具亲眼检查页面渲染
 - **实时进度显示** — 管道图显示所有阶段状态 + 计时 + 工具调用日志
@@ -31,7 +33,7 @@ npm install
 # 查看帮助
 npm start -- --help
 
-# 运行工作流
+# 运行工作流（自动创建 output_projects/project-1/）
 npm start -- "做一个番茄钟 CLI 工具"
 ```
 
@@ -81,17 +83,63 @@ npm start -- --project myapp --answers b_answers.txt "做一个贪吃蛇游戏"
 
 答案用 `---` 分隔，每段为 agent 一问的回答。文件读取完毕后回退到键盘输入。
 
+## 断点续跑
+
+工作流会在 `<projectDir>/.workflow-state.json` 中持久化记录每个阶段的执行状态。如果工作流被中断（Ctrl+C、网络断开等），可以随时恢复：
+
+```bash
+# 中断后自动恢复（会扫描 output_projects/ 中最近未完成的项目）
+npm start -- --continue
+
+# 指定项目恢复
+npm start -- --continue --project myapp
+
+# 短选项
+npm start -- -C
+```
+
+恢复后管道图会显示已完成阶段为 `OK`，从未完成的阶段继续。
+
+### 自动重试
+
+执行阶段或验证阶段因网络波动、包安装失败等原因出错时，会自动重试：
+
+```
+[1039s] ⚙ npx playwright install chromium
+[1039s] FAIL
+  [重试 verification] 第 2/3 次...   ← 自动重试
+```
+
+可通过配置文件调整重试次数：
+
+```json
+{
+  "executing-plans": { "retry": 2 },
+  "verification":    { "retry": 2 }
+}
+```
+
 ## 结构化输出
 
-使用 `--project <name>` 将所有产出归入独立目录：
+所有产出物统一归入 `output_projects/`：
 
 ```
-output_projects/<name>/
-├── brainstorming/       ← 设计文档
-├── writing-plans/       ← 计划文档 + plans/
-├── executing-plans/     ← 实现记录
-├── verification/        ← 验证报告 + screenshots/
+output_projects/<name>/                  ← --project 指定名称，或自动 project-N
+├── .workflow-state.json                 ← 工作流状态（断点续跑用）
+├── brainstorming/                       ← 设计文档
+├── writing-plans/                       ← 计划文档 + plans/
+├── executing-plans/                     ← 实现记录
+├── verification/                        ← 验证报告 + screenshots/
+└── code/                                ← 项目代码（独立 git 仓库）
 ```
+
+不传 `--project` 时自动使用递增序号：
+
+| 命令 | 输出目录 |
+|------|---------|
+| `npm start -- "项目A"` | `output_projects/project-1/` |
+| `npm start -- "项目B"` | `output_projects/project-2/` |
+| `npm start -- --project myapp "项目C"` | `output_projects/myapp/` |
 
 ## 配置文件
 
@@ -106,8 +154,14 @@ output_projects/<name>/
       "interactive": true,
       "onFailure": "stop"
     },
+    "executing-plans": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "retry": 2,
+      "onFailure": "continue"
+    },
     "verification": {
       "model": "openai-codex/gpt-5.5",
+      "retry": 2,
       "e2e": {
         "devCommand": "npm run dev",
         "baseUrl": "http://localhost:5173",
@@ -118,6 +172,19 @@ output_projects/<name>/
   }
 }
 ```
+
+### 配置项说明
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `model` | string | — | 模型引用 `provider/modelId` |
+| `label` | string | — | 管道图中显示的阶段标签 |
+| `thinking` | string | `"off"` | 思考级别: off/low/medium/high/xhigh |
+| `skill` | string | — | pi 技能名称（如 `brainstorming`） |
+| `interactive` | boolean | `false` | 是否支持多轮交互对话 |
+| `onFailure` | string | `"stop"` | 失败策略: stop（停止）/ continue（继续）|
+| `retry` | number | `0` | 失败后自动重试次数 |
+| `e2e` | object | — | E2E 视觉验证配置 |
 
 ### E2E 视觉验证
 
@@ -139,12 +206,23 @@ npm start -- --setup
 ## 命令参考
 
 ```bash
-npm start -- "项目描述"                    # 运行完整工作流
-npm start -- --project demo "项目描述"      # 输出到 output_projects/demo/
-npm start -- --answers ans.txt "项目描述"   # 用答案文件自动化
+# 运行
+npm start -- "项目描述"                              # 自动 project-1, project-2...
+npm start -- --project demo "项目描述"                # 输出到 output_projects/demo/
+npm start -- --answers ans.txt "项目描述"             # 用答案文件自动化
+npm start -- --continue                              # 从中断处恢复
+npm start -- --continue --project demo               # 恢复指定项目
+
+# 范围控制
 npm start -- --from brainstorming --to brainstorming "项目"  # 只跑 brainstorming
-npm start -- --setup                       # 交互式配置向导
-npm start -- --help                        # 帮助
+npm start -- --from executing-plans "项目"                   # 从 executing-plans 开始
+
+# 模型覆盖
+npm start -- --override brainstorming:other/model "项目"     # 临时换模型
+
+# 配置
+npm start -- --setup                                # 交互式配置向导
+npm start -- --help                                 # 帮助
 ```
 
 ## 项目结构
@@ -152,16 +230,24 @@ npm start -- --help                        # 帮助
 ```
 my-llm-workflow/
 ├── src/
-│   ├── cli.ts                 ← CLI 入口 + 交互逻辑
+│   ├── cli.ts                 ← CLI 入口 + 交互逻辑 + 管道图
 │   ├── config.ts              ← 配置加载与校验
 │   ├── config-wizard.ts       ← 交互式 Provider/模型配置向导
 │   ├── model-resolver.ts      ← 模型引用解析
 │   ├── artifact-store.ts      ← 产物文件管理
-│   ├── stage-runner.ts        ← 单阶段执行器
-│   ├── orchestrator.ts        ← 工作流编排器
-│   ├── pi-agent-factory.ts    ← pi SDK 包装
+│   ├── stage-runner.ts        ← 单阶段执行器抽象
+│   ├── orchestrator.ts        ← 工作流编排器 + 重试逻辑
+│   ├── workflow-state.ts      ← 工作流状态持久化
+│   ├── pi-agent-factory.ts    ← pi SDK 包装 + 本地 skill 加载
 │   └── e2e-screenshot.mjs    ← Playwright 截图工具
-├── test/                      ← 37 个测试
+├── test/                      ← 60 个测试
+│   ├── config.test.ts
+│   ├── orchestrator.test.ts
+│   ├── workflow-state.test.ts
+│   ├── stage-runner.test.ts
+│   ├── artifact-store.test.ts
+│   └── model-resolver.test.ts
+├── .pi/skills/                ← 本地 skill（覆盖全局）
 ├── workflow.config.json       ← 默认配置
 └── vitest.config.ts
 ```
@@ -169,7 +255,8 @@ my-llm-workflow/
 ## 开发
 
 ```bash
-npm test          # 运行测试 (37 tests)
+npm test          # 运行测试 (60 tests)
 npm test:watch    # 监听模式
 npm run build     # TypeScript 编译
+npm start -C      # 注意：-s 已被 --setup 占用，-C 是 --continue
 ```
